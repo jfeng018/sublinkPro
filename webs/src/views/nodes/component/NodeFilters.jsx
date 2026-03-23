@@ -14,7 +14,7 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 
 // utils
-import { isoToFlag, STATUS_OPTIONS } from '../utils';
+import { isoToFlag, QUALITY_STATUS_OPTIONS, STATUS_OPTIONS } from '../utils';
 
 /**
  * 节点过滤器工具栏
@@ -30,10 +30,18 @@ export default function NodeFilters({
   setMaxDelay,
   minSpeed,
   setMinSpeed,
+  maxFraudScore,
+  setMaxFraudScore,
   speedStatusFilter,
   setSpeedStatusFilter,
   delayStatusFilter,
   setDelayStatusFilter,
+  residentialType,
+  setResidentialType,
+  ipType,
+  setIpType,
+  qualityStatus,
+  setQualityStatus,
   countryFilter,
   setCountryFilter,
   tagFilter,
@@ -128,6 +136,42 @@ export default function NodeFilters({
         sx={{ width: 150 }}
         InputProps={{ endAdornment: <InputAdornment position="end">MB/s</InputAdornment> }}
       />
+      <TextField
+        size="small"
+        placeholder="最大欺诈评分"
+        type="number"
+        value={maxFraudScore}
+        onChange={(e) => setMaxFraudScore(e.target.value)}
+        sx={{ width: 160 }}
+      />
+      <FormControl size="small" sx={{ minWidth: 140 }}>
+        <InputLabel>质量状态</InputLabel>
+        <Select value={qualityStatus} label="质量状态" onChange={(e) => setQualityStatus(e.target.value)}>
+          {QUALITY_STATUS_OPTIONS.map((opt) => (
+            <MenuItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+      <FormControl size="small" sx={{ minWidth: 120 }}>
+        <InputLabel>住宅属性</InputLabel>
+        <Select value={residentialType} label="住宅属性" onChange={(e) => setResidentialType(e.target.value)}>
+          <MenuItem value="">全部</MenuItem>
+          <MenuItem value="residential">住宅IP</MenuItem>
+          <MenuItem value="datacenter">机房IP</MenuItem>
+          <MenuItem value="untested">未检测</MenuItem>
+        </Select>
+      </FormControl>
+      <FormControl size="small" sx={{ minWidth: 120 }}>
+        <InputLabel>IP类型</InputLabel>
+        <Select value={ipType} label="IP类型" onChange={(e) => setIpType(e.target.value)}>
+          <MenuItem value="">全部</MenuItem>
+          <MenuItem value="native">原生IP</MenuItem>
+          <MenuItem value="broadcast">广播IP</MenuItem>
+          <MenuItem value="untested">未检测</MenuItem>
+        </Select>
+      </FormControl>
       {countryOptions.length > 0 && (
         <Autocomplete
           multiple
@@ -219,10 +263,18 @@ NodeFilters.propTypes = {
   setMaxDelay: PropTypes.func.isRequired,
   minSpeed: PropTypes.string.isRequired,
   setMinSpeed: PropTypes.func.isRequired,
+  maxFraudScore: PropTypes.string.isRequired,
+  setMaxFraudScore: PropTypes.func.isRequired,
   speedStatusFilter: PropTypes.string.isRequired,
   setSpeedStatusFilter: PropTypes.func.isRequired,
   delayStatusFilter: PropTypes.string.isRequired,
   setDelayStatusFilter: PropTypes.func.isRequired,
+  residentialType: PropTypes.string.isRequired,
+  setResidentialType: PropTypes.func.isRequired,
+  ipType: PropTypes.string.isRequired,
+  setIpType: PropTypes.func.isRequired,
+  qualityStatus: PropTypes.string.isRequired,
+  setQualityStatus: PropTypes.func.isRequired,
   countryFilter: PropTypes.array.isRequired,
   setCountryFilter: PropTypes.func.isRequired,
   tagFilter: PropTypes.array.isRequired,

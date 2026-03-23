@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 
 // material-ui
-import { useTheme } from '@mui/material/styles';
+import { alpha, useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import Button from '@mui/material/Button';
 import Dialog from '@mui/material/Dialog';
@@ -40,12 +40,22 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import TransformIcon from '@mui/icons-material/Transform';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import CircularProgress from '@mui/material/CircularProgress';
 
 import MainCard from 'ui-component/cards/MainCard';
 import Pagination from 'components/Pagination';
 import SearchableNodeSelect from 'components/SearchableNodeSelect';
-import { getTemplates, addTemplate, updateTemplate, deleteTemplate, getACL4SSRPresets, convertRules } from 'api/templates';
+import {
+  getTemplates,
+  addTemplate,
+  updateTemplate,
+  deleteTemplate,
+  getTemplateUsage,
+  getACL4SSRPresets,
+  convertRules
+} from 'api/templates';
 import { getBaseTemplates, updateBaseTemplate } from 'api/settings';
 import { getNodes } from 'api/nodes';
 
@@ -67,7 +77,9 @@ export default function TemplateList() {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [aclPresets, setAclPresets] = useState([]);
   const [converting, setConverting] = useState(false);
+  const [editorFullscreen, setEditorFullscreen] = useState(false);
   const [errorDialog, setErrorDialog] = useState({ open: false, title: '', message: '' });
+  const [usageDialog, setUsageDialog] = useState({ open: false, title: '', message: '', subscriptions: [], action: null });
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(() => {
     const saved = localStorage.getItem('templates_rowsPerPage');
@@ -133,6 +145,10 @@ export default function TemplateList() {
     }
   };
 
+  const handleRefresh = () => {
+    fetchTemplates(page, rowsPerPage);
+  };
+
   useEffect(() => {
     fetchTemplates(0, rowsPerPage);
     // 获取 ACL4SSR 预设列表
@@ -155,12 +171,14 @@ export default function TemplateList() {
     setFormData({ filename: '', text: '', category: 'clash', ruleSource: '', enableIncludeAll: false });
     setUseProxy(false);
     setProxyLink('');
+    setEditorFullscreen(false);
     setDialogOpen(true);
   };
 
   const handleEdit = (template) => {
     setIsEdit(true);
     setCurrentTemplate(template);
+    setEditorFullscreen(false);
     setFormData({
       filename: template.file,
       text: template.text,
@@ -179,7 +197,18 @@ export default function TemplateList() {
   };
 
   const handleDelete = async (template) => {
-    openConfirm('删除模板', `确定要删除模板 "${template.file}" 吗？`, async () => {
+    let usedSubscriptions = [];
+
+    try {
+      const response = await getTemplateUsage({ filename: template.file });
+      usedSubscriptions = response.data?.subscriptions || [];
+    } catch (error) {
+      console.log(error);
+      showMessage(error.message || '获取模板使用情况失败', 'error');
+      return;
+    }
+
+    const deleteAction = async () => {
       try {
         await deleteTemplate({ filename: template.file });
         showMessage('删除成功');
@@ -188,7 +217,60 @@ export default function TemplateList() {
         console.log(error);
         showMessage(error.message || '删除失败', 'error');
       }
-    });
+    };
+
+    if (usedSubscriptions.length > 0) {
+      setUsageDialog({
+        open: true,
+        title: '模板正在被订阅使用',
+        message: `模板 "${template.file}" 当前正被以下订阅使用，删除后这些订阅可能受到影响，是否继续删除？`,
+        subscriptions: usedSubscriptions,
+        action: deleteAction
+      });
+      return;
+    }
+
+    openConfirm('删除模板', `确定要删除模板 "${template.file}" 吗？`, deleteAction);
+  };
+
+  const handleCloseDialog = () => {
+    setDialogOpen(false);
+    setEditorFullscreen(false);
+  };
+
+  const handleConvertTemplate = async (expand) => {
+    setConverting(true);
+    try {
+      const res = await convertRules({
+        ruleSource: formData.ruleSource,
+        category: formData.category,
+        expand,
+        template: formData.text,
+        useProxy: useProxy,
+        proxyLink: proxyLink,
+        enableIncludeAll: formData.enableIncludeAll
+      });
+      if (res.code === 200 && res.data && res.data.content) {
+        setFormData({ ...formData, text: res.data.content });
+        showMessage(expand ? '规则生成/转换并展开成功' : '规则生成/转换成功');
+      } else {
+        setErrorDialog({
+          open: true,
+          title: '规则生成/转换失败',
+          message: res.msg || '生成/转换过程中发生错误'
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      const errorMsg = error.response?.data?.msg || error.message || '规则生成/转换失败';
+      setErrorDialog({
+        open: true,
+        title: '规则生成/转换失败',
+        message: errorMsg
+      });
+    } finally {
+      setConverting(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -217,6 +299,7 @@ export default function TemplateList() {
         });
         showMessage('添加成功');
       }
+      setEditorFullscreen(false);
       setDialogOpen(false);
       fetchTemplates(page, rowsPerPage);
     } catch (error) {
@@ -275,6 +358,17 @@ export default function TemplateList() {
     }
   };
 
+  const compactOutlinedFieldSx = {
+    '& .MuiInputLabel-root': {
+      px: 0.5,
+      backgroundColor: 'background.paper',
+      maxWidth: 'calc(100% - 24px)'
+    },
+    '& .MuiInputLabel-shrink': {
+      maxWidth: 'calc(133% - 32px)'
+    }
+  };
+
   return (
     <MainCard
       title="模板管理"
@@ -294,7 +388,7 @@ export default function TemplateList() {
             <Button variant="contained" startIcon={<AddIcon />} onClick={handleAdd}>
               添加模板
             </Button>
-            <IconButton onClick={() => fetchTemplates(page, rowsPerPage)} disabled={loading}>
+            <IconButton onClick={handleRefresh} disabled={loading}>
               <RefreshIcon
                 sx={
                   loading
@@ -312,7 +406,7 @@ export default function TemplateList() {
     >
       {matchDownMd && (
         <Stack direction="row" justifyContent="flex-end" sx={{ mb: 2 }}>
-          <IconButton onClick={() => fetchTemplates(page, rowsPerPage)} disabled={loading} size="small">
+          <IconButton onClick={handleRefresh} disabled={loading} size="small">
             <RefreshIcon
               sx={
                 loading
@@ -418,208 +512,67 @@ export default function TemplateList() {
       />
 
       {/* 添加/编辑对话框 */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="lg" fullWidth>
-        <DialogTitle>{isEdit ? '编辑模板' : '添加模板'}</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField
-                fullWidth
-                label="文件名"
-                value={formData.filename}
-                onChange={(e) => setFormData({ ...formData, filename: e.target.value })}
-                placeholder="例如: clash.yaml"
-              />
-              <FormControl sx={{ minWidth: 120 }}>
-                <InputLabel>类别</InputLabel>
-                <Select value={formData.category} label="类别" onChange={(e) => setFormData({ ...formData, category: e.target.value })}>
-                  <MenuItem value="clash">Clash</MenuItem>
-                  <MenuItem value="surge">Surge</MenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
-            <Autocomplete
-              freeSolo
-              options={aclPresets}
-              getOptionLabel={(option) => {
-                if (typeof option === 'string') return option;
-                return option.label || option.url || '';
-              }}
-              isOptionEqualToValue={(option, value) => {
-                // 如果 value 是字符串，比较 URL
-                if (typeof value === 'string') {
-                  return option.url === value;
-                }
-                // 如果 value 是对象，比较 URL
-                return option.url === value?.url;
-              }}
-              value={
-                // 如果 ruleSource 匹配某个预设的 URL，返回该预设对象
-                aclPresets.find((preset) => preset.url === formData.ruleSource) || formData.ruleSource
+      <Dialog
+        open={dialogOpen}
+        onClose={handleCloseDialog}
+        maxWidth={editorFullscreen ? false : 'lg'}
+        fullWidth
+        fullScreen={editorFullscreen}
+        PaperProps={{
+          sx: editorFullscreen
+            ? {
+                height: '100vh',
+                maxHeight: '100vh',
+                m: 0
               }
-              onChange={(event, newValue) => {
-                if (typeof newValue === 'string') {
-                  setFormData({ ...formData, ruleSource: newValue });
-                } else if (newValue && newValue.url) {
-                  setFormData({ ...formData, ruleSource: newValue.url });
-                } else {
-                  setFormData({ ...formData, ruleSource: '' });
+            : undefined
+        }}
+      >
+        <DialogTitle
+          sx={
+            editorFullscreen
+              ? {
+                  pb: 1,
+                  display: 'flex',
+                  flexDirection: { xs: 'column', md: 'row' },
+                  alignItems: { xs: 'stretch', md: 'center' },
+                  justifyContent: 'space-between',
+                  gap: 1.5
                 }
-              }}
-              onInputChange={(event, newInputValue) => {
-                setFormData({ ...formData, ruleSource: newInputValue });
-              }}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="远程规则地址"
-                  placeholder="输入 URL 或选择 ACL4SSR 预设"
-                  helperText="可填写远程 ACL 规则配置地址，生成订阅时会动态加载规则"
-                />
-              )}
-              renderOption={(props, option) => (
-                <li {...props} key={option.name}>
-                  <Stack>
-                    <Typography variant="body2">{option.label}</Typography>
-                    <Typography variant="caption" color="textSecondary" sx={{ fontSize: '0.7rem' }}>
-                      {option.url}
-                    </Typography>
-                  </Stack>
-                </li>
-              )}
-            />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={useProxy}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setUseProxy(checked);
-                    if (checked) {
-                      fetchProxyNodes();
-                    }
-                  }}
-                />
-              }
-              label="使用代理下载远程规则"
-            />
-            {useProxy && (
-              <Box>
-                <SearchableNodeSelect
-                  nodes={proxyNodeOptions}
-                  loading={loadingProxyNodes}
-                  value={proxyNodeOptions.find((n) => n.Link === proxyLink) || (proxyLink ? { Link: proxyLink, Name: '', ID: 0 } : null)}
-                  onChange={(newValue) => setProxyLink(newValue?.Link || '')}
-                  displayField="Name"
-                  valueField="Link"
-                  label="选择代理节点"
-                  placeholder="留空则自动选择最佳节点"
-                  helperText="如果未选择具体代理，系统将自动选择延迟最低且速度最快的节点"
-                  freeSolo={true}
-                  limit={50}
-                />
-              </Box>
+              : undefined
+          }
+        >
+          <Stack spacing={0.5}>
+            <Typography variant="h4">{isEdit ? '编辑模板' : '添加模板'}</Typography>
+            {editorFullscreen && (
+              <Typography variant="body2" color="textSecondary">
+                全屏模式已切换为编辑器优先布局，模板配置保留为紧凑工具栏。
+              </Typography>
             )}
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={formData.enableIncludeAll}
-                  onChange={(e) => setFormData({ ...formData, enableIncludeAll: e.target.checked })}
-                />
-              }
-              label="使用 Include-All 模式"
-            />
-            <Typography variant="caption" color="textSecondary" component="div" sx={{ ml: 6, mt: -0.5, lineHeight: 1.6 }}>
-              • 开启：配置更精简，使用客户端 include-all 自动匹配节点，不遵循系统排序
-            </Typography>
-            <Typography variant="caption" color="textSecondary" component="div" sx={{ ml: 6, lineHeight: 1.6 }}>
-              • 关闭（推荐）：由系统按顺序插入节点，遵循系统排序和过滤规则
-            </Typography>
-            <Stack direction="row" spacing={1}>
+          </Stack>
+          {editorFullscreen && (
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap justifyContent="flex-end">
               <Button
                 variant="outlined"
-                startIcon={converting ? <CircularProgress size={18} /> : <TransformIcon />}
+                size="small"
+                startIcon={converting ? <CircularProgress size={16} /> : <TransformIcon />}
                 disabled={!formData.ruleSource || converting}
-                onClick={async () => {
-                  setConverting(true);
-                  try {
-                    const res = await convertRules({
-                      ruleSource: formData.ruleSource,
-                      category: formData.category,
-                      expand: false,
-                      template: formData.text,
-                      useProxy: useProxy,
-                      proxyLink: proxyLink,
-                      enableIncludeAll: formData.enableIncludeAll
-                    });
-                    if (res.code === 200 && res.data && res.data.content) {
-                      setFormData({ ...formData, text: res.data.content });
-                      showMessage('规则生成/转换成功');
-                    } else {
-                      setErrorDialog({
-                        open: true,
-                        title: '规则生成/转换失败',
-                        message: res.msg || '生成/转换过程中发生错误'
-                      });
-                    }
-                  } catch (error) {
-                    console.error(error);
-                    const errorMsg = error.response?.data?.msg || error.message || '规则生成/转换失败';
-                    setErrorDialog({
-                      open: true,
-                      title: '规则生成/转换失败',
-                      message: errorMsg
-                    });
-                  } finally {
-                    setConverting(false);
-                  }
-                }}
+                onClick={() => handleConvertTemplate(false)}
               >
-                规则生成/转换
+                生成/转换
               </Button>
               <Button
                 variant="outlined"
-                startIcon={converting ? <CircularProgress size={18} /> : <UnfoldMoreIcon />}
+                size="small"
+                startIcon={converting ? <CircularProgress size={16} /> : <UnfoldMoreIcon />}
                 disabled={!formData.ruleSource || converting}
-                onClick={async () => {
-                  setConverting(true);
-                  try {
-                    const res = await convertRules({
-                      ruleSource: formData.ruleSource,
-                      category: formData.category,
-                      expand: true,
-                      template: formData.text,
-                      useProxy: useProxy,
-                      proxyLink: proxyLink,
-                      enableIncludeAll: formData.enableIncludeAll
-                    });
-                    if (res.code === 200 && res.data && res.data.content) {
-                      setFormData({ ...formData, text: res.data.content });
-                      showMessage('规则生成/转换并展开成功');
-                    } else {
-                      setErrorDialog({
-                        open: true,
-                        title: '规则生成/转换失败',
-                        message: res.msg || '转换过程中发生错误'
-                      });
-                    }
-                  } catch (error) {
-                    console.error(error);
-                    const errorMsg = error.response?.data?.msg || error.message || '规则生成/转换失败';
-                    setErrorDialog({
-                      open: true,
-                      title: '规则生成/转换失败',
-                      message: errorMsg
-                    });
-                  } finally {
-                    setConverting(false);
-                  }
-                }}
+                onClick={() => handleConvertTemplate(true)}
               >
-                规则生成/转换（远程规则展开模式）
+                转换并展开
               </Button>
               <Button
                 variant="outlined"
+                size="small"
                 color="error"
                 disabled={!formData.text || converting}
                 onClick={() => {
@@ -629,10 +582,345 @@ export default function TemplateList() {
                   });
                 }}
               >
-                清空内容
+                清空
+              </Button>
+              <Button size="small" onClick={handleCloseDialog}>
+                取消
+              </Button>
+              <Button variant="contained" size="small" onClick={handleSubmit}>
+                保存
+              </Button>
+              <Button variant="outlined" size="small" startIcon={<FullscreenExitIcon />} onClick={() => setEditorFullscreen(false)}>
+                退出全屏
               </Button>
             </Stack>
-            <Box sx={{ position: 'relative' }}>
+          )}
+        </DialogTitle>
+        <DialogContent
+          sx={
+            editorFullscreen
+              ? {
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                  pt: 1,
+                  pb: 2
+                }
+              : undefined
+          }
+        >
+          <Stack spacing={2} sx={editorFullscreen ? { flex: 1, minHeight: 0 } : { mt: 1 }}>
+            {editorFullscreen ? (
+              <Box
+                sx={{
+                  px: 0.5,
+                  py: 1,
+                  border: 1,
+                  borderColor: 'divider',
+                  borderRadius: 1,
+                  bgcolor: 'background.paper'
+                }}
+              >
+                <Stack spacing={1.25}>
+                  <Stack direction={{ xs: 'column', lg: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', lg: 'flex-start' }}>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="文件名"
+                      value={formData.filename}
+                      onChange={(e) => setFormData({ ...formData, filename: e.target.value })}
+                      placeholder="例如: clash.yaml"
+                      InputLabelProps={{ shrink: true }}
+                      sx={{
+                        ...compactOutlinedFieldSx,
+                        flex: { lg: '0 0 240px' }
+                      }}
+                    />
+                    <FormControl size="small" sx={{ minWidth: { xs: '100%', lg: 140 }, flex: { lg: '0 0 140px' } }}>
+                      <InputLabel shrink sx={compactOutlinedFieldSx['& .MuiInputLabel-root']}>
+                        类别
+                      </InputLabel>
+                      <Select
+                        value={formData.category}
+                        label="类别"
+                        notched
+                        onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                      >
+                        <MenuItem value="clash">Clash</MenuItem>
+                        <MenuItem value="surge">Surge</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Autocomplete
+                      freeSolo
+                      options={aclPresets}
+                      sx={{ flex: 1, minWidth: 0 }}
+                      getOptionLabel={(option) => {
+                        if (typeof option === 'string') return option;
+                        return option.label || option.url || '';
+                      }}
+                      isOptionEqualToValue={(option, value) => {
+                        if (typeof value === 'string') {
+                          return option.url === value;
+                        }
+                        return option.url === value?.url;
+                      }}
+                      value={aclPresets.find((preset) => preset.url === formData.ruleSource) || formData.ruleSource}
+                      onChange={(event, newValue) => {
+                        if (typeof newValue === 'string') {
+                          setFormData({ ...formData, ruleSource: newValue });
+                        } else if (newValue && newValue.url) {
+                          setFormData({ ...formData, ruleSource: newValue.url });
+                        } else {
+                          setFormData({ ...formData, ruleSource: '' });
+                        }
+                      }}
+                      onInputChange={(event, newInputValue) => {
+                        setFormData({ ...formData, ruleSource: newInputValue });
+                      }}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          size="small"
+                          label="远程规则地址"
+                          placeholder="输入 URL 或选择 ACL4SSR 预设"
+                          InputLabelProps={{ ...params.InputLabelProps, shrink: true }}
+                          sx={compactOutlinedFieldSx}
+                        />
+                      )}
+                      renderOption={(props, option) => (
+                        <li {...props} key={option.name}>
+                          <Stack>
+                            <Typography variant="body2">{option.label}</Typography>
+                            <Typography variant="caption" color="textSecondary" sx={{ fontSize: '0.7rem' }}>
+                              {option.url}
+                            </Typography>
+                          </Stack>
+                        </li>
+                      )}
+                    />
+                  </Stack>
+                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ xs: 'flex-start', md: 'center' }}>
+                    <FormControlLabel
+                      sx={{ mr: 0 }}
+                      control={
+                        <Switch
+                          size="small"
+                          checked={useProxy}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setUseProxy(checked);
+                            if (checked) {
+                              fetchProxyNodes();
+                            }
+                          }}
+                        />
+                      }
+                      label="使用代理下载远程规则"
+                    />
+                    <FormControlLabel
+                      sx={{ mr: 0 }}
+                      control={
+                        <Switch
+                          size="small"
+                          checked={formData.enableIncludeAll}
+                          onChange={(e) => setFormData({ ...formData, enableIncludeAll: e.target.checked })}
+                        />
+                      }
+                      label="使用 Include-All 模式"
+                    />
+                  </Stack>
+                  {useProxy && (
+                    <SearchableNodeSelect
+                      nodes={proxyNodeOptions}
+                      loading={loadingProxyNodes}
+                      value={
+                        proxyNodeOptions.find((n) => n.Link === proxyLink) || (proxyLink ? { Link: proxyLink, Name: '', ID: 0 } : null)
+                      }
+                      onChange={(newValue) => setProxyLink(newValue?.Link || '')}
+                      displayField="Name"
+                      valueField="Link"
+                      label="选择代理节点"
+                      placeholder="留空则自动选择最佳节点"
+                      helperText="如果未选择具体代理，系统将自动选择最佳节点"
+                      freeSolo={true}
+                      limit={50}
+                    />
+                  )}
+                </Stack>
+              </Box>
+            ) : (
+              <>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                  <TextField
+                    fullWidth
+                    label="文件名"
+                    value={formData.filename}
+                    onChange={(e) => setFormData({ ...formData, filename: e.target.value })}
+                    placeholder="例如: clash.yaml"
+                  />
+                  <FormControl sx={{ minWidth: 120 }}>
+                    <InputLabel>类别</InputLabel>
+                    <Select value={formData.category} label="类别" onChange={(e) => setFormData({ ...formData, category: e.target.value })}>
+                      <MenuItem value="clash">Clash</MenuItem>
+                      <MenuItem value="surge">Surge</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+                <Autocomplete
+                  freeSolo
+                  options={aclPresets}
+                  getOptionLabel={(option) => {
+                    if (typeof option === 'string') return option;
+                    return option.label || option.url || '';
+                  }}
+                  isOptionEqualToValue={(option, value) => {
+                    // 如果 value 是字符串，比较 URL
+                    if (typeof value === 'string') {
+                      return option.url === value;
+                    }
+                    // 如果 value 是对象，比较 URL
+                    return option.url === value?.url;
+                  }}
+                  value={
+                    // 如果 ruleSource 匹配某个预设的 URL，返回该预设对象
+                    aclPresets.find((preset) => preset.url === formData.ruleSource) || formData.ruleSource
+                  }
+                  onChange={(event, newValue) => {
+                    if (typeof newValue === 'string') {
+                      setFormData({ ...formData, ruleSource: newValue });
+                    } else if (newValue && newValue.url) {
+                      setFormData({ ...formData, ruleSource: newValue.url });
+                    } else {
+                      setFormData({ ...formData, ruleSource: '' });
+                    }
+                  }}
+                  onInputChange={(event, newInputValue) => {
+                    setFormData({ ...formData, ruleSource: newInputValue });
+                  }}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="远程规则地址"
+                      placeholder="输入 URL 或选择 ACL4SSR 预设"
+                      helperText="可填写远程 ACL 规则配置地址，生成订阅时会动态加载规则"
+                    />
+                  )}
+                  renderOption={(props, option) => (
+                    <li {...props} key={option.name}>
+                      <Stack>
+                        <Typography variant="body2">{option.label}</Typography>
+                        <Typography variant="caption" color="textSecondary" sx={{ fontSize: '0.7rem' }}>
+                          {option.url}
+                        </Typography>
+                      </Stack>
+                    </li>
+                  )}
+                />
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={useProxy}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setUseProxy(checked);
+                        if (checked) {
+                          fetchProxyNodes();
+                        }
+                      }}
+                    />
+                  }
+                  label="使用代理下载远程规则"
+                />
+                {useProxy && (
+                  <Box>
+                    <SearchableNodeSelect
+                      nodes={proxyNodeOptions}
+                      loading={loadingProxyNodes}
+                      value={
+                        proxyNodeOptions.find((n) => n.Link === proxyLink) || (proxyLink ? { Link: proxyLink, Name: '', ID: 0 } : null)
+                      }
+                      onChange={(newValue) => setProxyLink(newValue?.Link || '')}
+                      displayField="Name"
+                      valueField="Link"
+                      label="选择代理节点"
+                      placeholder="留空则自动选择最佳节点"
+                      helperText="如果未选择具体代理，系统将自动选择延迟最低且速度最快的节点"
+                      freeSolo={true}
+                      limit={50}
+                    />
+                  </Box>
+                )}
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={formData.enableIncludeAll}
+                      onChange={(e) => setFormData({ ...formData, enableIncludeAll: e.target.checked })}
+                    />
+                  }
+                  label="使用 Include-All 模式"
+                />
+                <Typography variant="caption" color="textSecondary" component="div" sx={{ ml: 6, mt: -0.5, lineHeight: 1.6 }}>
+                  • 开启：配置更精简，使用客户端 include-all 自动匹配节点，不遵循系统排序
+                </Typography>
+                <Typography variant="caption" color="textSecondary" component="div" sx={{ ml: 6, lineHeight: 1.6 }}>
+                  • 关闭（推荐）：由系统按顺序插入节点，遵循系统排序和过滤规则
+                </Typography>
+                <Stack direction="row" spacing={1}>
+                  <Button
+                    variant="outlined"
+                    startIcon={converting ? <CircularProgress size={18} /> : <TransformIcon />}
+                    disabled={!formData.ruleSource || converting}
+                    onClick={() => handleConvertTemplate(false)}
+                  >
+                    规则生成/转换
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={converting ? <CircularProgress size={18} /> : <UnfoldMoreIcon />}
+                    disabled={!formData.ruleSource || converting}
+                    onClick={() => handleConvertTemplate(true)}
+                  >
+                    规则生成/转换（远程规则展开模式）
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    disabled={!formData.text || converting}
+                    onClick={() => {
+                      openConfirm('清空内容', '确定要清空编辑器中的所有内容吗？', () => {
+                        setFormData({ ...formData, text: '' });
+                        showMessage('已清空内容');
+                      });
+                    }}
+                  >
+                    清空内容
+                  </Button>
+                </Stack>
+                <Stack direction="row" justifyContent="flex-end">
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={editorFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+                    onClick={() => setEditorFullscreen((prev) => !prev)}
+                  >
+                    {editorFullscreen ? '退出全屏' : '全屏编辑'}
+                  </Button>
+                </Stack>
+              </>
+            )}
+            <Box
+              sx={
+                editorFullscreen
+                  ? {
+                      position: 'relative',
+                      flex: 1,
+                      minHeight: 0,
+                      borderRadius: 1,
+                      overflow: 'hidden'
+                    }
+                  : { position: 'relative' }
+              }
+            >
               {converting && (
                 <Box
                   sx={{
@@ -656,7 +944,7 @@ export default function TemplateList() {
                 </Box>
               )}
               <Editor
-                height="350px"
+                height={editorFullscreen ? '100%' : '350px'}
                 language={formData.category === 'surge' ? 'ini' : 'yaml'}
                 value={formData.text}
                 onChange={(value) => setFormData({ ...formData, text: value || '' })}
@@ -676,12 +964,14 @@ export default function TemplateList() {
             </Box>
           </Stack>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>取消</Button>
-          <Button variant="contained" onClick={handleSubmit}>
-            确定
-          </Button>
-        </DialogActions>
+        {!editorFullscreen && (
+          <DialogActions>
+            <Button onClick={handleCloseDialog}>取消</Button>
+            <Button variant="contained" onClick={handleSubmit}>
+              确定
+            </Button>
+          </DialogActions>
+        )}
       </Dialog>
 
       {/* 提示消息 */}
@@ -703,11 +993,13 @@ export default function TemplateList() {
       >
         <DialogTitle id="alert-dialog-title">{confirmInfo.title}</DialogTitle>
         <DialogContent>
-          <DialogContentText id="alert-dialog-description">{confirmInfo.content}</DialogContentText>
+          <DialogContentText id="alert-dialog-description" sx={{ color: 'text.primary' }}>
+            {confirmInfo.content}
+          </DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleConfirmClose}>取消</Button>
-          <Button onClick={handleConfirmAction} color="primary" autoFocus>
+          <Button onClick={handleConfirmAction} variant="contained" color="error" autoFocus>
             确定
           </Button>
         </DialogActions>
@@ -732,6 +1024,67 @@ export default function TemplateList() {
         <DialogActions>
           <Button variant="contained" onClick={() => setErrorDialog({ ...errorDialog, open: false })} autoFocus>
             知道了
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={usageDialog.open}
+        onClose={() => setUsageDialog({ ...usageDialog, open: false })}
+        aria-labelledby="template-usage-dialog-title"
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle id="template-usage-dialog-title">⚠️ {usageDialog.title}</DialogTitle>
+        <DialogContent>
+          <Alert
+            severity="warning"
+            variant="outlined"
+            sx={{
+              mt: 1,
+              alignItems: 'flex-start',
+              backgroundColor: alpha(theme.palette.warning.main, 0.08),
+              borderColor: alpha(theme.palette.warning.main, 0.28),
+              color: 'text.primary',
+              '& .MuiAlert-icon': {
+                color: 'warning.dark',
+                mt: '2px'
+              },
+              '& .MuiAlert-message': {
+                width: '100%'
+              }
+            }}
+          >
+            {usageDialog.message}
+          </Alert>
+          {usageDialog.subscriptions?.length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                使用中的订阅：
+              </Typography>
+              <Stack spacing={1}>
+                {usageDialog.subscriptions.map((subscriptionName) => (
+                  <Chip key={subscriptionName} label={subscriptionName} color="warning" variant="outlined" sx={{ width: 'fit-content' }} />
+                ))}
+              </Stack>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setUsageDialog({ ...usageDialog, open: false, subscriptions: [], action: null })}>取消</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={async () => {
+              const action = usageDialog.action;
+              setUsageDialog({ open: false, title: '', message: '', subscriptions: [], action: null });
+              if (action) {
+                await action();
+              }
+            }}
+            autoFocus
+          >
+            继续删除
           </Button>
         </DialogActions>
       </Dialog>

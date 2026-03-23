@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"sublink/constants"
 )
 
 // TagGroupTagsFn 标签组标签查询函数类型
@@ -68,16 +70,130 @@ func replaceTagGroupVariables(rule string, nodeTags string) string {
 
 // NodeInfo 节点信息结构体，用于重命名
 type NodeInfo struct {
-	Name        string  // 系统节点备注名称
-	LinkName    string  // 节点原始名称（来自订阅源）
-	LinkCountry string  // 落地IP国家代码
-	Speed       float64 // 速度 (MB/s)
-	DelayTime   int     // 延迟 (ms)
-	Group       string  // 分组
-	Source      string  // 来源（手动添加/订阅名称）
-	Index       int     // 序号 (从1开始)
-	Protocol    string  // 协议类型
-	Tags        string  // 节点标签（逗号分隔）
+	Name          string  // 系统节点备注名称
+	LinkName      string  // 节点原始名称（来自订阅源）
+	LinkCountry   string  // 落地IP国家代码
+	Speed         float64 // 速度 (MB/s)
+	SpeedStatus   string  // 速度状态: untested/success/timeout/error
+	DelayTime     int     // 延迟 (ms)
+	DelayStatus   string  // 延迟状态: untested/success/timeout/error
+	Group         string  // 分组
+	Source        string  // 来源（手动添加/订阅名称）
+	Index         int     // 序号 (从1开始)
+	Protocol      string  // 协议类型
+	Tags          string  // 节点标签（逗号分隔）
+	IsBroadcast   bool    // IP来源：true=广播 false=原生
+	IsResidential bool    // 是否住宅IP
+	FraudScore    int     // 欺诈评分（0-100，-1=未检测）
+	QualityStatus string
+	QualityFamily string
+}
+
+const (
+	qualityStatusUntested = "untested"
+	qualityStatusSuccess  = "success"
+	qualityStatusPartial  = "partial"
+	qualityStatusFailed   = "failed"
+	qualityStatusDisabled = "disabled"
+	qualityFamilyIPv6     = "ipv6"
+)
+
+// FormatFraudScoreIcon 根据欺诈评分返回对应图标
+// fraudScore: 欺诈评分（0-100，-1=未检测）
+func FormatFraudScoreIcon(fraudScore int, qualityStatus string) string {
+	if qualityStatus == qualityStatusPartial {
+		return "ℹ️"
+	}
+	if qualityStatus != "" && qualityStatus != qualityStatusSuccess {
+		return "⛔️"
+	}
+	if fraudScore < 0 {
+		return "⛔️"
+	}
+	switch {
+	case fraudScore <= 10:
+		return "⚪"
+	case fraudScore <= 30:
+		return "🟢"
+	case fraudScore <= 50:
+		return "🟡"
+	case fraudScore <= 70:
+		return "🟠"
+	case fraudScore <= 89:
+		return "🔴"
+	default:
+		return "⚫"
+	}
+}
+
+// FormatSpeedIcon 根据速度和测速状态返回对应图标
+func FormatSpeedIcon(speed float64, speedStatus string) string {
+	switch speedStatus {
+	case constants.StatusTimeout:
+		return "⏱️"
+	case constants.StatusError:
+		return "❌"
+	case constants.StatusSuccess:
+		if speed >= 5 {
+			return "🟢"
+		}
+		if speed >= 1 {
+			return "🟡"
+		}
+		return "🔴"
+	case constants.StatusUntested:
+		return "⛔️"
+	}
+
+	// 兼容历史数据：状态缺失时根据数值兜底判断
+	if speed == -1 {
+		return "❌"
+	}
+	if speed > 0 {
+		if speed >= 5 {
+			return "🟢"
+		}
+		if speed >= 1 {
+			return "🟡"
+		}
+		return "🔴"
+	}
+	return "⛔️"
+}
+
+// FormatDelayIcon 根据延迟和测速状态返回对应图标
+func FormatDelayIcon(delay int, delayStatus string) string {
+	switch delayStatus {
+	case constants.StatusTimeout:
+		return "⏱️"
+	case constants.StatusError:
+		return "❌"
+	case constants.StatusSuccess:
+		if delay < 200 {
+			return "🟢"
+		}
+		if delay < 500 {
+			return "🟡"
+		}
+		return "🔴"
+	case constants.StatusUntested:
+		return "⛔️"
+	}
+
+	// 兼容历史数据：状态缺失时根据数值兜底判断
+	if delay == -1 {
+		return "⏱️"
+	}
+	if delay > 0 {
+		if delay < 200 {
+			return "🟢"
+		}
+		if delay < 500 {
+			return "🟡"
+		}
+		return "🔴"
+	}
+	return "⛔️"
 }
 
 // PreprocessRule 原名预处理规则结构体
@@ -269,8 +385,35 @@ func RenameNode(rule string, info NodeInfo) string {
 	// 按变量名长度降序排列，长的变量名优先替换
 	replacements := []replacement{
 		{"$LinkCountry", linkCountry},
+		{"$Residential", func() string {
+			if info.QualityStatus != qualityStatusSuccess {
+				return formatQualityText(info)
+			}
+			if info.IsResidential {
+				return "住宅IP"
+			}
+			return "机房IP"
+		}()},
+		{"$SpeedIcon", FormatSpeedIcon(info.Speed, info.SpeedStatus)},
+		{"$DelayIcon", FormatDelayIcon(info.DelayTime, info.DelayStatus)},
+		{"$FraudScoreIcon", FormatFraudScoreIcon(info.FraudScore, info.QualityStatus)},
+		{"$FraudScore", func() string {
+			if info.QualityStatus != qualityStatusSuccess {
+				return formatQualityText(info)
+			}
+			return fmt.Sprintf("%d", info.FraudScore)
+		}()},
 		{"$LinkName", info.LinkName},
 		{"$Protocol", info.Protocol},
+		{"$IpType", func() string {
+			if info.QualityStatus != qualityStatusSuccess {
+				return formatQualityText(info)
+			}
+			if info.IsBroadcast {
+				return "广播IP"
+			}
+			return "原生IP"
+		}()},
 		{"$Source", linkSource},
 		{"$Speed", FormatSpeed(info.Speed)},
 		{"$Delay", FormatDelay(info.DelayTime)},
@@ -486,4 +629,22 @@ func renameSSRLink(link string, newName string) string {
 	}
 
 	return "ssr://" + Base64Encode(decoded)
+}
+
+func formatQualityText(info NodeInfo) string {
+	switch info.QualityStatus {
+	case qualityStatusPartial:
+		if info.QualityFamily == qualityFamilyIPv6 {
+			return "IPv6部分结果"
+		}
+		return "部分结果"
+	case qualityStatusFailed:
+		return "检测失败"
+	case qualityStatusDisabled:
+		return "未启用"
+	case qualityStatusUntested, "":
+		return "未检测"
+	default:
+		return "未检测"
+	}
 }

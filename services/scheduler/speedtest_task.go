@@ -7,12 +7,38 @@ import (
 	"sublink/node"
 	"sublink/services/geoip"
 	"sublink/services/mihomo"
-	"sublink/services/sse"
+	"sublink/services/notifications"
 	"sublink/utils"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+func resetNodeQualityInfo(node *models.Node) {
+	node.IsBroadcast = false
+	node.IsResidential = false
+	node.FraudScore = -1
+	node.QualityStatus = models.QualityStatusUntested
+	node.QualityFamily = ""
+}
+
+func applyNodeQualityInfo(node *models.Node, quality *mihomo.QualityCheckResult) {
+	if quality == nil {
+		resetNodeQualityInfo(node)
+		return
+	}
+	node.QualityStatus = quality.Status
+	node.QualityFamily = quality.Family
+	if quality.Status == models.QualityStatusSuccess {
+		node.IsBroadcast = quality.IsBroadcast
+		node.IsResidential = quality.IsResidential
+		node.FraudScore = quality.FraudScore
+		return
+	}
+	node.IsBroadcast = false
+	node.IsResidential = false
+	node.FraudScore = -1
+}
 
 // RunSpeedTestWithConfig 使用指定配置执行节点测速（并发安全）
 // 每个任务使用独立的配置实例，完全避免配置覆盖问题
@@ -68,6 +94,11 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 	landingIPUrl := config.LandingIPURL
 	if landingIPUrl == "" {
 		landingIPUrl = "https://api.ipify.org"
+	}
+	detectQuality := config.DetectQuality
+	qualityCheckURL := config.QualityCheckURL
+	if qualityCheckURL == "" {
+		qualityCheckURL = "https://my.ippure.com/v1/info"
 	}
 
 	// 流量统计开关
@@ -227,7 +258,17 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 			// 使用 Mihomo URLTest 测量延迟
 			// TCP模式下需要检测IP（因为没有速度测试阶段），mihomo模式在速度阶段检测
 			detectIPInLatency := detectCountry && speedTestMode == "tcp"
-			latency, landingIP, err := mihomo.MihomoDelayTest(n.Link, latencyTestUrl, speedTestTimeout, includeHandshake, detectIPInLatency, landingIPUrl)
+			detectQualityInLatency := detectQuality && speedTestMode == "tcp"
+			latency, landingIP, qualityInfo, err := mihomo.MihomoDelayTest(
+				n.Link,
+				latencyTestUrl,
+				speedTestTimeout,
+				includeHandshake,
+				detectIPInLatency,
+				landingIPUrl,
+				detectQualityInLatency,
+				qualityCheckURL,
+			)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -257,6 +298,9 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 			// TCP模式下收集结果（稍后批量写入）
 			if speedTestMode == "tcp" {
 				preserveSpeed := config.PreserveSpeedResult
+				if detectQualityInLatency {
+					applyNodeQualityInfo(&n, qualityInfo)
+				}
 				if err != nil {
 					failCount++
 					utils.Debug("节点 [%s] 延迟测试失败: %v", n.Name, err)
@@ -319,6 +363,11 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 					LinkCountry:     n.LinkCountry,
 					LandingIP:       n.LandingIP,
 					SkipSpeedFields: preserveSpeed, // 标记是否跳过速度字段更新
+					IsBroadcast:     n.IsBroadcast,
+					IsResidential:   n.IsResidential,
+					FraudScore:      n.FraudScore,
+					QualityStatus:   n.QualityStatus,
+					QualityFamily:   n.QualityFamily,
 				})
 			}
 
@@ -397,6 +446,9 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 				mu.Lock()
 				failCount++
 				completedCount++
+				if detectQuality {
+					resetNodeQualityInfo(&nr.node)
+				}
 				nr.node.Speed = -1
 				nr.node.SpeedStatus = constants.StatusError // 因延迟失败无法测速
 				nr.node.DelayTime = -1
@@ -413,6 +465,11 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 					SpeedCheckAt:   "",
 					LinkCountry:    nr.node.LinkCountry,
 					LandingIP:      nr.node.LandingIP,
+					IsBroadcast:    nr.node.IsBroadcast,
+					IsResidential:  nr.node.IsResidential,
+					FraudScore:     nr.node.FraudScore,
+					QualityStatus:  nr.node.QualityStatus,
+					QualityFamily:  nr.node.QualityFamily,
 				})
 				mu.Unlock()
 				continue
@@ -446,7 +503,17 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 				}
 
 				// 速度测试（延迟已在阶段一获取，同时可选检测落地IP）
-				speed, _, bytesDownloaded, landingIP, err := mihomo.MihomoSpeedTest(result.node.Link, speedTestUrl, speedTestTimeout, detectCountry, landingIPUrl, speedRecordMode, peakSampleInterval)
+				speed, _, bytesDownloaded, landingIP, qualityInfo, err := mihomo.MihomoSpeedTest(
+					result.node.Link,
+					speedTestUrl,
+					speedTestTimeout,
+					detectCountry,
+					landingIPUrl,
+					detectQuality,
+					qualityCheckURL,
+					speedRecordMode,
+					peakSampleInterval,
+				)
 
 				mu.Lock()
 				defer mu.Unlock()
@@ -506,6 +573,9 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 
 				if err != nil {
 					atomic.AddInt32(&failCount, 1)
+					if detectQuality {
+						resetNodeQualityInfo(&result.node)
+					}
 					utils.Debug("节点 [%s] 速度测试失败: %v (延迟: %d ms, 已下载: %s)", result.node.Name, err, result.latency, formatBytes(bytesDownloaded))
 					result.node.Speed = -1
 					result.node.SpeedStatus = constants.StatusError
@@ -519,6 +589,9 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 					}
 				} else {
 					atomic.AddInt32(&successCount, 1)
+					if detectQuality {
+						applyNodeQualityInfo(&result.node, qualityInfo)
+					}
 					utils.Debug("节点 [%s] 测速成功: 速度 %.2f MB/s, 延迟 %d ms, 流量消耗: %s", result.node.Name, speed, result.latency, formatBytes(bytesDownloaded))
 					result.node.Speed = speed
 					result.node.SpeedStatus = constants.StatusSuccess
@@ -574,6 +647,11 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 					SpeedCheckAt:   result.node.SpeedCheckAt,
 					LinkCountry:    result.node.LinkCountry,
 					LandingIP:      result.node.LandingIP,
+					IsBroadcast:    result.node.IsBroadcast,
+					IsResidential:  result.node.IsResidential,
+					FraudScore:     result.node.FraudScore,
+					QualityStatus:  result.node.QualityStatus,
+					QualityFamily:  result.node.QualityFamily,
 				})
 
 				// 获取当前流量统计（用于实时显示）
@@ -691,16 +769,18 @@ func RunSpeedTestWithConfig(nodes []models.Node, trigger models.TaskTrigger, pro
 		tm.CompleteTask(taskID, fmt.Sprintf("测速完成 (成功: %d, 失败: %d, 流量: %s)", successCount, failCount, formatBytes(trafficTotal)), resultData)
 
 		// 广播测速完成通知（让用户在通知中心看到）
-		sse.GetSSEBroker().BroadcastEvent("task_update", sse.NotificationPayload{
-			Event:   "speed_test",
+		notifications.Publish("task.speed_test_completed", notifications.Payload{
 			Title:   "节点测速完成",
 			Message: fmt.Sprintf("测速完成: 成功 %d 个, 失败 %d 个, 消耗流量 %s", successCount, failCount, formatBytes(trafficTotal)),
 			Data: map[string]interface{}{
-				"status":  "success",
-				"success": successCount,
-				"fail":    failCount,
-				"total":   totalNodes,
-				"traffic": formatBytes(trafficTotal),
+				"status":           "success",
+				"success":          successCount,
+				"success_count":    successCount,
+				"fail":             failCount,
+				"fail_count":       failCount,
+				"total":            totalNodes,
+				"traffic":          formatBytes(trafficTotal),
+				"total_traffic_mb": float64(trafficTotal) / 1024 / 1024,
 			},
 		})
 	}

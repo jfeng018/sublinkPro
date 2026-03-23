@@ -154,6 +154,43 @@ func convertToInt(value interface{}) (int, error) {
 	}
 }
 
+func isTruthyConfigValue(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+
+	return false
+}
+
+func shouldPreserveProxyGroup(proxyGroup map[string]interface{}) bool {
+	for _, field := range []string{"include-all", "include-all-proxies", "include-all-providers"} {
+		if isTruthyConfigValue(proxyGroup[field]) {
+			return true
+		}
+	}
+
+	// Provider 组和自动匹配组由客户端在运行时解析，不能在服务端展开为固定节点列表。
+	for _, field := range []string{"use", "filter", "exclude-filter", "exclude-type", "expected-status"} {
+		if _, exists := proxyGroup[field]; exists {
+			return true
+		}
+	}
+
+	return false
+}
+
 // convertSSPluginOpts 将 SsPlugin 转换为 Clash 格式的 plugin-opts
 // 根据不同插件类型生成对应的配置
 func convertSSPluginOpts(plugin SsPlugin) map[string]interface{} {
@@ -697,7 +734,7 @@ func DecodeClash(proxys []Proxy, yamlfile string, customGroups ...[]CustomProxyG
 		}
 	}
 	// 解析 YAML 文件
-	config := make(map[interface{}]interface{})
+	config := make(map[string]interface{})
 	err = yaml.Unmarshal(data, &config)
 	if err != nil {
 		utils.Error("error: %v", err)
@@ -720,7 +757,10 @@ func DecodeClash(proxys []Proxy, yamlfile string, customGroups ...[]CustomProxyG
 	// proxies = append(proxies, newProxy)
 	config["proxies"] = proxies
 	// 往ProxyGroup中插入代理列表
-	proxyGroups := config["proxy-groups"].([]interface{})
+	proxyGroups, ok := config["proxy-groups"].([]interface{})
+	if !ok {
+		proxyGroups = []interface{}{}
+	}
 
 	// 插入自定义代理组（在模板组之后）
 	// 使用 _custom_group 标记来标识自定义代理组，后续循环时跳过节点追加
@@ -788,18 +828,16 @@ func DecodeClash(proxys []Proxy, yamlfile string, customGroups ...[]CustomProxyG
 			continue
 		}
 
-		// 如果已有 include-all: true，说明使用自动节点匹配模式，跳过节点插入
-		// filter、exclude-filter、exclude-type、expected-status 等过滤参数都需要 include-all 为前提
-		// 这样可以减小配置文件大小，让客户端自动包含/过滤节点
-		if includeAll, ok := proxyGroup["include-all"].(bool); ok && includeAll {
-			continue
-		}
-
 		// 自定义代理组（由链式代理规则生成）已有自己的节点列表，跳过节点追加
 		if isCustom, ok := proxyGroup["_custom_group"].(bool); ok && isCustom {
 			// 删除内部标记，避免输出到配置文件
 			delete(proxyGroup, "_custom_group")
 			proxyGroups[i] = proxyGroup
+			continue
+		}
+
+		// include-all、use/filter 等自动匹配组应保持模板原意，不能强行展开为固定节点列表。
+		if shouldPreserveProxyGroup(proxyGroup) {
 			continue
 		}
 

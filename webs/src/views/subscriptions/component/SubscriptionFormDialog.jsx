@@ -48,6 +48,8 @@ import NodeProtocolFilter from 'components/NodeProtocolFilter';
 import NodeTransferBox from './NodeTransferBox';
 import DeduplicationConfig from './DeduplicationConfig';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
+import { getFraudScoreIcon, QUALITY_STATUS_OPTIONS } from 'utils/fraudScore';
+import { getDelayIcon, getSpeedIcon } from 'utils/nodeMetricIcons';
 
 // ISO国家代码转换为国旗emoji
 const isoToFlag = (isoCode) => {
@@ -72,6 +74,12 @@ const previewNodeName = (rule) => {
   return result
     .replace(/\$Name/g, '香港节点-备注')
     .replace(/\$Flag/g, '🇭🇰')
+    .replace(/\$SpeedIcon/g, getSpeedIcon(1.5, 'success'))
+    .replace(/\$DelayIcon/g, getDelayIcon(125, 'success'))
+    .replace(/\$IpType/g, '原生IP')
+    .replace(/\$Residential/g, '住宅IP')
+    .replace(/\$FraudScoreIcon/g, getFraudScoreIcon(12, 'success'))
+    .replace(/\$FraudScore/g, '12')
     .replace(/\$LinkName/g, '香港01')
     .replace(/\$LinkCountry/g, 'HK')
     .replace(/\$Speed/g, '1.50MB/s')
@@ -228,6 +236,10 @@ export default function SubscriptionFormDialog({
     if (formData.protocolBlacklist) count++;
     if (formData.nodeNameWhitelist) count++;
     if (formData.nodeNameBlacklist) count++;
+    if (formData.MaxFraudScore > 0) count++;
+    if (formData.QualityStatus) count++;
+    if (formData.ResidentialType) count++;
+    if (formData.IPType) count++;
     return count;
   }, [formData]);
 
@@ -576,6 +588,45 @@ export default function SubscriptionFormDialog({
                       helperText="设置筛选节点的最小下载速度，0表示不限制"
                     />
                   </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      fullWidth
+                      label="最大欺诈评分"
+                      type="text"
+                      inputProps={{ inputMode: 'numeric', pattern: '[0-9]*' }}
+                      value={formData.MaxFraudScore}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '' || /^\d+$/.test(val)) {
+                          setFormData({ ...formData, MaxFraudScore: val === '' ? '' : Number(val) });
+                        }
+                      }}
+                      onBlur={(e) => {
+                        const val = Math.max(0, Number(e.target.value) || 0);
+                        setFormData({ ...formData, MaxFraudScore: val });
+                      }}
+                      helperText="0表示不限制；需要先执行 IP 质量检测"
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <FormControl fullWidth>
+                      <InputLabel>质量状态</InputLabel>
+                      <Select
+                        value={formData.QualityStatus || ''}
+                        label="质量状态"
+                        onChange={(e) => setFormData({ ...formData, QualityStatus: e.target.value })}
+                      >
+                        {QUALITY_STATUS_OPTIONS.map((option) => (
+                          <MenuItem key={option.value} value={option.value}>
+                            {option.label}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <Typography variant="caption" color="textSecondary" display="block" sx={{ mt: 1 }}>
+                      可区分完整结果、信息不全、检测失败、未启用和未检测
+                    </Typography>
+                  </Grid>
                 </Grid>
 
                 {/* 落地IP国家过滤 */}
@@ -605,6 +656,45 @@ export default function SubscriptionFormDialog({
                       )}
                       renderOption={(props, option) => <li {...props}>{formatCountry(option)}</li>}
                     />
+                  </Grid>
+                </Grid>
+
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <FormControl fullWidth>
+                      <InputLabel>住宅属性</InputLabel>
+                      <Select
+                        value={formData.ResidentialType || ''}
+                        label="住宅属性"
+                        onChange={(e) => setFormData({ ...formData, ResidentialType: e.target.value })}
+                      >
+                        <MenuItem value="">全部</MenuItem>
+                        <MenuItem value="residential">住宅IP</MenuItem>
+                        <MenuItem value="datacenter">机房IP</MenuItem>
+                        <MenuItem value="untested">未检测</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Typography variant="caption" color="textSecondary" display="block" sx={{ mt: 1 }}>
+                      仅完整结果才会显示住宅/机房属性；信息不全会保留为独立状态
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <FormControl fullWidth>
+                      <InputLabel>IP类型</InputLabel>
+                      <Select
+                        value={formData.IPType || ''}
+                        label="IP类型"
+                        onChange={(e) => setFormData({ ...formData, IPType: e.target.value })}
+                      >
+                        <MenuItem value="">全部</MenuItem>
+                        <MenuItem value="native">原生IP</MenuItem>
+                        <MenuItem value="broadcast">广播IP</MenuItem>
+                        <MenuItem value="untested">未检测</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Typography variant="caption" color="textSecondary" display="block" sx={{ mt: 1 }}>
+                      仅完整结果才会显示原生/广播属性；信息不全不会被误判为原生或广播
+                    </Typography>
                   </Grid>
                 </Grid>
 
@@ -724,9 +814,14 @@ export default function SubscriptionFormDialog({
                           <strong>可用变量：</strong>
                           <br />• <code>$Name</code> - 系统备注名称 &nbsp;&nbsp; • <code>$LinkName</code> - 原始节点名称
                           <br />• <code>$LinkCountry</code> - 落地IP国家代码 &nbsp;&nbsp; • <code>$Speed</code> - 下载速度
-                          <br />• <code>$Delay</code> - 延迟 &nbsp;&nbsp; • <code>$Group</code> - 分组名称
+                          <br />• <code>$SpeedIcon</code> - 速度图标(🟢🟡🔴/❌⏱️⛔️) &nbsp;&nbsp; • <code>$Delay</code> - 延迟
+                          <br />• <code>$DelayIcon</code> - 延迟图标(🟢🟡🔴/❌⏱️⛔️) &nbsp;&nbsp; • <code>$Group</code> - 分组名称
                           <br />• <code>$Source</code> - 来源 &nbsp;&nbsp; • <code>$Index</code> - 序号 &nbsp;&nbsp; •{' '}
                           <code>$Protocol</code> - 协议类型
+                          <br />• <code>$IpType</code> - IP类型(原生IP/广播IP) &nbsp;&nbsp; • <code>$Residential</code> -
+                          住宅属性(住宅IP/机房IP)
+                          <br />• <code>$FraudScore</code> - 欺诈评分 &nbsp;&nbsp; • <code>$FraudScoreIcon</code> -
+                          欺诈图标(⚪🟢🟡🟠🔴⚫/⛔️)
                           <br />• <code>$Tags</code> - 所有标签(竖线分隔) &nbsp;&nbsp; • <code>$TagGroup(组名)</code> - 指定标签组中的标签
                         </Typography>
                       </Box>

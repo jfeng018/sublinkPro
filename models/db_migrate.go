@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sublink/database"
 	"sublink/node/protocol"
 	"sublink/utils"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -21,137 +23,150 @@ func md5Hash(src string) string {
 }
 
 // RunMigrations 执行所有数据库迁移
-// 此函数必须在 database.InitSqlite() 之后调用
-func RunMigrations() {
+// 此函数必须在 database.Init() 之后调用
+func RunMigrations() error {
 	db := database.DB
 	if db == nil {
-		utils.Error("数据库未初始化，无法执行迁移")
-		return
+		return fmt.Errorf("数据库未初始化，无法执行迁移")
 	}
 
 	// 检查是否已经初始化
 	if database.IsInitialized {
 		utils.Info("数据库已经初始化，无需重复初始化")
-		return
+		return nil
 	}
 
-	// 基础数据库初始化
-	if err := db.AutoMigrate(&User{}); err != nil {
-		utils.Error("基础数据表User迁移失败: %v", err)
-	} else {
-		utils.Info("数据表User创建成功")
+	baseTables := []struct {
+		name  string
+		model interface{}
+	}{
+		{name: "User", model: &User{}},
+		{name: "MFALoginChallenge", model: &MFALoginChallenge{}},
+		{name: "Subcription", model: &Subcription{}},
+		{name: "Node", model: &Node{}},
+		{name: "SubLogs", model: &SubLogs{}},
+		{name: "AccessKey", model: &AccessKey{}},
+		{name: "SystemSetting", model: &SystemSetting{}},
+		{name: "Webhook", model: &Webhook{}},
+		{name: "Script", model: &Script{}},
+		{name: "SubcriptionGroup", model: &SubcriptionGroup{}},
+		{name: "SubcriptionScript", model: &SubcriptionScript{}},
+		{name: "Template", model: &Template{}},
+		{name: "Tag", model: &Tag{}},
+		{name: "TagRule", model: &TagRule{}},
+		{name: "Task", model: &Task{}},
+		{name: "IPInfo", model: &IPInfo{}},
+		{name: "Host", model: &Host{}},
+		{name: "SubscriptionShare", model: &SubscriptionShare{}},
+		{name: "SubscriptionChainRule", model: &SubscriptionChainRule{}},
+		{name: "Airport", model: &Airport{}},
+		{name: "GroupAirportSort", model: &GroupAirportSort{}},
+		{name: "NodeCheckProfile", model: &NodeCheckProfile{}},
 	}
-	if err := db.AutoMigrate(&Subcription{}); err != nil {
-		utils.Error("基础数据表Subcription迁移失败: %v", err)
-	} else {
-		utils.Info("数据表Subcription创建成功")
-	}
-	if err := db.AutoMigrate(&Node{}); err != nil {
-		utils.Error("基础数据表Node迁移失败: %v", err)
-	} else {
-		utils.Info("数据表Node创建成功")
-	}
-	if err := db.AutoMigrate(&SubLogs{}); err != nil {
-		utils.Error("基础数据表SubLogs迁移失败: %v", err)
-	} else {
-		utils.Info("数据表SubLogs创建成功")
-	}
-	if err := db.AutoMigrate(&AccessKey{}); err != nil {
-		utils.Error("基础数据表AccessKey迁移失败: %v", err)
-	} else {
-		utils.Info("数据表AccessKey创建成功")
-	}
-	//if err := db.AutoMigrate(&SubScheduler{}); err != nil {
-	//	utils.Error("基础数据表SubScheduler迁移失败: %v", err)
-	//} else {
-	//	utils.Info("数据表SubScheduler创建成功")
-	//}
-	if err := db.AutoMigrate(&SystemSetting{}); err != nil {
-		utils.Error("基础数据表SystemSetting迁移失败: %v", err)
-	} else {
-		utils.Info("数据表SystemSetting创建成功")
-	}
-	if err := db.AutoMigrate(&Script{}); err != nil {
-		utils.Error("基础数据表Script迁移失败: %v", err)
-	} else {
-		utils.Info("数据表Script创建成功")
-	}
-	if err := db.AutoMigrate(&SubcriptionGroup{}); err != nil {
-		utils.Error("基础数据表SubcriptionGroup迁移失败: %v", err)
-	} else {
-		utils.Info("数据表SubcriptionGroup创建成功")
-	}
-	/*
-		if err := db.AutoMigrate(&SubcriptionNode{}); err != nil {
-			utils.Error("基础数据表SubcriptionNode迁移失败: %v", err)
-		} else {
-			utils.Info("数据表SubcriptionNode创建成功")
+
+	for _, table := range baseTables {
+		if err := db.AutoMigrate(table.model); err != nil {
+			utils.Error("基础数据表%s迁移失败: %v", table.name, err)
+			return fmt.Errorf("基础数据表%s迁移失败: %w", table.name, err)
 		}
-	*/
-	if err := db.AutoMigrate(&SubcriptionScript{}); err != nil {
-		utils.Error("基础数据表SubcriptionScript迁移失败: %v", err)
-	} else {
-		utils.Info("数据表SubcriptionScript创建成功")
+		utils.Info("数据表%s创建成功", table.name)
 	}
-	if err := db.AutoMigrate(&Template{}); err != nil {
-		utils.Error("基础数据表Template迁移失败: %v", err)
-	} else {
-		utils.Info("数据表Template创建成功")
+
+	if err := database.RunCustomMigration("0027_add_user_pending_mfa_columns", func() error {
+		if !db.Migrator().HasColumn(&User{}, "totp_pending_recovery_codes") {
+			if err := db.Migrator().AddColumn(&User{}, "TOTPPendingRecoveryCodes"); err != nil {
+				return err
+			}
+		}
+		if result := db.Exec("UPDATE users SET totp_pending_recovery_codes = '[]' WHERE totp_pending_recovery_codes IS NULL OR totp_pending_recovery_codes = ''"); result.Error != nil {
+			return result.Error
+		}
+		return nil
+	}); err != nil {
+		utils.Error("执行迁移 0027_add_user_pending_mfa_columns 失败: %v", err)
 	}
-	if err := db.AutoMigrate(&Tag{}); err != nil {
-		utils.Error("基础数据表Tag迁移失败: %v", err)
-	} else {
-		utils.Info("数据表Tag创建成功")
+
+	if err := database.RunCustomMigration("0028_backfill_node_quality_status", func() error {
+		if !db.Migrator().HasColumn(&Node{}, "QualityStatus") {
+			if err := db.Migrator().AddColumn(&Node{}, "QualityStatus"); err != nil {
+				return err
+			}
+		}
+		if !db.Migrator().HasColumn(&Node{}, "QualityFamily") {
+			if err := db.Migrator().AddColumn(&Node{}, "QualityFamily"); err != nil {
+				return err
+			}
+		}
+
+		if err := db.Model(&Node{}).Where("quality_status IS NULL OR quality_status = ''").Updates(map[string]interface{}{
+			"quality_status": gorm.Expr("CASE WHEN fraud_score >= 0 THEN 'success' ELSE 'untested' END"),
+			"quality_family": gorm.Expr("CASE WHEN landing_ip LIKE '%:%' THEN 'ipv6' WHEN landing_ip IS NOT NULL AND landing_ip != '' THEN 'ipv4' ELSE '' END"),
+		}).Error; err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		utils.Error("执行迁移 0028_backfill_node_quality_status 失败: %v", err)
 	}
-	if err := db.AutoMigrate(&TagRule{}); err != nil {
-		utils.Error("基础数据表TagRule迁移失败: %v", err)
-	} else {
-		utils.Info("数据表TagRule创建成功")
+
+	if err := database.RunCustomMigration("0024_migrate_legacy_webhook_settings", func() error {
+		legacyURL, _ := GetSetting("webhook_url")
+		legacyMethod, _ := GetSetting("webhook_method")
+		legacyContentType, _ := GetSetting("webhook_content_type")
+		legacyHeaders, _ := GetSetting("webhook_headers")
+		legacyBody, _ := GetSetting("webhook_body")
+		legacyEnabled, _ := GetSetting("webhook_enabled")
+		legacyEventKeys, _ := GetSetting("webhook_event_keys")
+
+		if strings.TrimSpace(legacyURL) == "" && strings.TrimSpace(legacyHeaders) == "" && strings.TrimSpace(legacyBody) == "" {
+			return nil
+		}
+
+		var count int64
+		if err := db.Model(&Webhook{}).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return nil
+		}
+
+		method := strings.ToUpper(strings.TrimSpace(legacyMethod))
+		if method == "" {
+			method = "POST"
+		}
+		contentType := strings.TrimSpace(legacyContentType)
+		if contentType == "" {
+			contentType = "application/json"
+		}
+
+		config := Webhook{
+			Name:        "默认 Webhook",
+			URL:         strings.TrimSpace(legacyURL),
+			Method:      method,
+			ContentType: contentType,
+			Headers:     legacyHeaders,
+			Body:        legacyBody,
+			Enabled:     legacyEnabled == "true",
+			EventKeys:   legacyEventKeys,
+		}
+		return db.Create(&config).Error
+	}); err != nil {
+		utils.Error("执行迁移 0024_migrate_legacy_webhook_settings 失败: %v", err)
 	}
-	if err := db.AutoMigrate(&Task{}); err != nil {
-		utils.Error("基础数据表Task迁移失败: %v", err)
-	} else {
-		utils.Info("数据表Task创建成功")
+
+	if err := database.RunCustomMigration("0025_drop_remember_tokens_table", func() error {
+		if !db.Migrator().HasTable("remember_tokens") {
+			return nil
+		}
+		return db.Migrator().DropTable("remember_tokens")
+	}); err != nil {
+		utils.Error("执行迁移 0025_drop_remember_tokens_table 失败: %v", err)
 	}
-	if err := db.AutoMigrate(&IPInfo{}); err != nil {
-		utils.Error("基础数据表IPInfo迁移失败: %v", err)
-	} else {
-		utils.Info("数据表IPInfo创建成功")
-	}
-	if err := db.AutoMigrate(&RememberToken{}); err != nil {
-		utils.Error("基础数据表RememberToken迁移失败: %v", err)
-	} else {
-		utils.Info("数据表RememberToken创建成功")
-	}
-	if err := db.AutoMigrate(&Host{}); err != nil {
-		utils.Error("基础数据表Host迁移失败: %v", err)
-	} else {
-		utils.Info("数据表Host创建成功")
-	}
-	if err := db.AutoMigrate(&SubscriptionShare{}); err != nil {
-		utils.Error("基础数据表SubscriptionShare迁移失败: %v", err)
-	} else {
-		utils.Info("数据表SubscriptionShare创建成功")
-	}
-	if err := db.AutoMigrate(&SubscriptionChainRule{}); err != nil {
-		utils.Error("基础数据表SubscriptionChainRule迁移失败: %v", err)
-	} else {
-		utils.Info("数据表SubscriptionChainRule创建成功")
-	}
-	if err := db.AutoMigrate(&Airport{}); err != nil {
-		utils.Error("基础数据表Airport迁移失败: %v", err)
-	} else {
-		utils.Info("数据表Airport创建成功")
-	}
-	if err := db.AutoMigrate(&GroupAirportSort{}); err != nil {
-		utils.Error("基础数据表GroupAirportSort迁移失败: %v", err)
-	} else {
-		utils.Info("数据表GroupAirportSort创建成功")
-	}
-	if err := db.AutoMigrate(&NodeCheckProfile{}); err != nil {
-		utils.Error("基础数据表NodeCheckProfile迁移失败: %v", err)
-	} else {
-		utils.Info("数据表NodeCheckProfile创建成功")
+
+	if err := database.RunCustomMigration("0026_add_user_totp_columns", func() error {
+		return db.AutoMigrate(&User{})
+	}); err != nil {
+		utils.Error("执行迁移 0026_add_user_totp_columns 失败: %v", err)
 	}
 
 	// 检查并删除 idx_name_id 索引
@@ -172,8 +187,16 @@ func RunMigrations() {
 
 	// 0008_node_created_at_fill - 补全空的 CreatedAt 字段
 	if err := database.RunCustomMigration("0008_node_created_at_fill", func() error {
-		// 查找所有 CreatedAt 为零值的节点并设置为当前时间
-		result := db.Exec("UPDATE nodes SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL OR created_at = '' OR created_at = '0001-01-01 00:00:00+00:00'")
+		// 兼容不同数据库方言，避免 timestamp 字段与空字符串比较时报错
+		query := db.Model(&Node{}).
+			Where("created_at IS NULL").
+			Or("created_at = ?", time.Time{}).
+			Or("created_at = ?", "0001-01-01 00:00:00+00:00")
+		if database.IsSQLite() {
+			query = query.Or("created_at = ?", "")
+		}
+
+		result := query.Update("created_at", gorm.Expr("CURRENT_TIMESTAMP"))
 		if result.Error != nil {
 			return result.Error
 		}
@@ -340,7 +363,11 @@ DIRECT = direct
 		// 检查 last_check 列是否存在
 		if db.Migrator().HasColumn(&Node{}, "last_check") {
 			// 将 last_check 数据复制到 latency_check_at 和 speed_check_at
-			result := db.Exec("UPDATE nodes SET latency_check_at = last_check, speed_check_at = last_check WHERE last_check IS NOT NULL AND last_check != ''")
+			condition := "last_check IS NOT NULL"
+			if database.IsSQLite() {
+				condition += " AND last_check != ''"
+			}
+			result := db.Exec("UPDATE nodes SET latency_check_at = last_check, speed_check_at = last_check WHERE " + condition)
 			if result.Error != nil {
 				utils.Error("迁移 last_check 数据失败: %v", result.Error)
 				return result.Error
@@ -840,6 +867,61 @@ DIRECT = direct
 		utils.Error("执行迁移 0021_recalculate_node_content_hash 失败: %v", err)
 	}
 
+	// 0022_fill_node_link_hash - 为历史数据回填 LinkHash，供跨数据库唯一约束使用
+	if err := database.RunCustomMigration("0022_fill_node_link_hash", func() error {
+		if !db.Migrator().HasTable(&Node{}) || !db.Migrator().HasColumn(&Node{}, "link_hash") {
+			return nil
+		}
+
+		var rows []struct {
+			ID       int
+			Link     string
+			LinkHash string
+		}
+		if err := db.Model(&Node{}).Select("id", "link", "link_hash").Find(&rows).Error; err != nil {
+			return fmt.Errorf("读取节点 LinkHash 失败: %w", err)
+		}
+
+		updated := 0
+		for _, row := range rows {
+			if row.Link == "" || row.LinkHash != "" {
+				continue
+			}
+			if err := db.Model(&Node{}).Where("id = ?", row.ID).Update("link_hash", hashNodeLink(row.Link)).Error; err != nil {
+				return fmt.Errorf("回填节点 LinkHash 失败(id=%d): %w", row.ID, err)
+			}
+			updated++
+		}
+
+		utils.Info("节点 LinkHash 回填完成，共更新 %d 条记录", updated)
+		return nil
+	}); err != nil {
+		utils.Error("执行迁移 0022_fill_node_link_hash 失败: %v", err)
+	}
+
+	// 0023_normalize_subscription_share_timestamps - 清理分享表中的零时间/无效时间占位
+	if err := database.RunCustomMigration("0023_normalize_subscription_share_timestamps", func() error {
+		if !db.Migrator().HasTable(&SubscriptionShare{}) {
+			return nil
+		}
+
+		if err := db.Model(&SubscriptionShare{}).
+			Where("expire_type <> ?", ExpireTypeDateTime).
+			Update("expire_at", nil).Error; err != nil {
+			return fmt.Errorf("清理非日期分享 expire_at 失败: %w", err)
+		}
+
+		if err := db.Model(&SubscriptionShare{}).
+			Where("access_count <= ?", 0).
+			Update("last_access_at", nil).Error; err != nil {
+			return fmt.Errorf("清理未访问分享 last_access_at 失败: %w", err)
+		}
+
+		return nil
+	}); err != nil {
+		utils.Error("执行迁移 0023_normalize_subscription_share_timestamps 失败: %v", err)
+	}
+
 	// 初始化用户数据
 	err := db.First(&User{}).Error
 	if err == gorm.ErrRecordNotFound {
@@ -876,6 +958,7 @@ DIRECT = direct
 	// 设置初始化标志为 true
 	database.IsInitialized = true
 	utils.Info("数据库初始化成功")
+	return nil
 }
 
 // Rollback0014_migrate_subcription_node_to_id_v2 回滚迁移 0014
@@ -890,7 +973,9 @@ func Rollback0014_migrate_subcription_node_to_id_v2() error {
 
 	// 检查备份表是否存在
 	var count int64
-	db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='subcription_nodes_backup'").Scan(&count)
+	if db.Migrator().HasTable("subcription_nodes_backup") {
+		count = 1
+	}
 	if count == 0 {
 		return fmt.Errorf("备份表 subcription_nodes_backup 不存在，无法回滚")
 	}
@@ -906,7 +991,7 @@ func Rollback0014_migrate_subcription_node_to_id_v2() error {
 	}
 
 	// 3. 删除迁移记录
-	if err := db.Exec("DELETE FROM schema_migrations WHERE version = '0014_migrate_subcription_node_to_id_v2'").Error; err != nil {
+	if err := db.Delete(&database.Migration{}, "id = ?", "0014_migrate_subcription_node_to_id_v2").Error; err != nil {
 		utils.Warn("删除迁移记录失败: %v", err)
 	}
 

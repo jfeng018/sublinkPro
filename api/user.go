@@ -47,6 +47,11 @@ func UserMe(c *gin.Context) {
 		"userId":   user.ID,
 		"username": user.Username,
 		"roles":    []string{"ADMIN"},
+		"mfa": gin.H{
+			"enabled":                user.TOTPEnabled,
+			"pendingEnrollment":      buildMFAStatus(user).PendingEnrollment,
+			"recoveryCodesRemaining": user.CountRecoveryCodes(),
+		},
 	})
 }
 
@@ -102,11 +107,6 @@ func UserSet(c *gin.Context) {
 		return
 	}
 
-	// 清除该用户的所有记住密码令牌
-	if err := models.DeleteUserRememberTokens(user.ID); err != nil {
-		utils.Error("清除记住密码令牌失败: %v", err)
-	}
-
 	// 修改成功
 	utils.OkWithMsg(c, "修改成功")
 }
@@ -117,6 +117,7 @@ func UserChangePassword(c *gin.Context) {
 		OldPassword     string `json:"oldPassword" binding:"required"`
 		NewPassword     string `json:"newPassword" binding:"required"`
 		ConfirmPassword string `json:"confirmPassword" binding:"required"`
+		Code            string `json:"code"`
 	}
 
 	var req ChangePasswordRequest
@@ -137,16 +138,15 @@ func UserChangePassword(c *gin.Context) {
 		return
 	}
 
-	// 获取当前用户
 	username, _ := c.Get("username")
-	user := &models.User{
-		Username: username.(string),
-		Password: req.OldPassword,
+	user := &models.User{Username: username.(string)}
+	if err := user.Find(); err != nil {
+		utils.FailWithMsg(c, "用户不存在")
+		return
 	}
 
-	// 验证旧密码是否正确
-	if err := user.Verify(); err != nil {
-		utils.FailWithMsg(c, "当前密码错误")
+	if err := requireMFAReauth(user, req.OldPassword, req.Code); err != nil {
+		utils.FailWithMsg(c, err.Error())
 		return
 	}
 
@@ -158,12 +158,6 @@ func UserChangePassword(c *gin.Context) {
 		return
 	}
 
-	// 删除该用户的所有记住密码令牌，强制重新登录
-	if err := models.DeleteUserRememberTokens(user.ID); err != nil {
-		utils.Error("清除记住密码令牌失败: %v", err)
-		// 不影响密码修改成功的返回
-	}
-
 	utils.OkWithMsg(c, "密码修改成功")
 }
 
@@ -172,6 +166,8 @@ func UserUpdateProfile(c *gin.Context) {
 	type UpdateProfileRequest struct {
 		Username string `json:"username"`
 		Nickname string `json:"nickname"`
+		Password string `json:"password" binding:"required"`
+		Code     string `json:"code"`
 	}
 
 	var req UpdateProfileRequest
@@ -196,6 +192,11 @@ func UserUpdateProfile(c *gin.Context) {
 		return
 	}
 
+	if err := requireMFAReauth(user, req.Password, req.Code); err != nil {
+		utils.FailWithMsg(c, err.Error())
+		return
+	}
+
 	// 使用 map 更新字段，避免 GORM 忽略零值
 	updates := map[string]interface{}{
 		"username": req.Username,
@@ -206,13 +207,6 @@ func UserUpdateProfile(c *gin.Context) {
 		utils.Error("个人资料更新失败: %v", err)
 		utils.FailWithMsg(c, "个人资料更新失败: "+err.Error())
 		return
-	}
-
-	// 如果修改了用户名，需要清除 remember token
-	if req.Username != username.(string) {
-		if err := models.DeleteUserRememberTokens(user.ID); err != nil {
-			utils.Error("清除记住密码令牌失败: %v", err)
-		}
 	}
 
 	utils.OkWithMsg(c, "个人资料更新成功")

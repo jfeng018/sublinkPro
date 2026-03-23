@@ -3,10 +3,9 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo } 
 import { useNavigate } from 'react-router-dom';
 
 // API imports
-import { login as loginApi, logout as logoutApi, getUserInfo, rememberLogin as rememberLoginApi } from 'api/auth';
+import { login as loginApi, logout as logoutApi, getUserInfo, verifyMfaLogin } from 'api/auth';
 
-// Remember Token 的 localStorage key
-const REMEMBER_TOKEN_KEY = 'sublink_remember_token';
+const REMEMBERED_USERNAME_KEY = 'sublink_remembered_username';
 
 // ==============================|| AUTH CONTEXT ||============================== //
 
@@ -16,6 +15,88 @@ const AuthContext = createContext(null);
 let eventSource = null;
 let heartbeatTimeout = null;
 let reconnectTimeout = null;
+
+function getPayloadData(payload) {
+  return payload?.data || payload || {};
+}
+
+function normalizeTokenPayload(payload) {
+  const data = getPayloadData(payload);
+  const tokenType = data.tokenType || data.token_type || data.authType || data.auth_type;
+  const accessToken = data.accessToken || data.access_token || data.token;
+
+  if (!accessToken) {
+    return null;
+  }
+
+  return {
+    tokenType: tokenType || 'Bearer',
+    accessToken
+  };
+}
+
+function normalizeMfaChallenge(payload) {
+  const data = getPayloadData(payload);
+  const nestedMfa = data.mfa || data.challenge || data.auth || {};
+  const challengeData = nestedMfa.challenge || nestedMfa;
+  const errorType = data.errorType || challengeData.errorType || nestedMfa.errorType || '';
+  const methods = data.methods || challengeData.methods || nestedMfa.methods || [];
+  const challengeToken =
+    data.challengeToken ||
+    data.mfaToken ||
+    data.ticket ||
+    data.sessionToken ||
+    challengeData.challengeToken ||
+    challengeData.mfaToken ||
+    challengeData.ticket ||
+    challengeData.sessionToken ||
+    nestedMfa.challengeToken ||
+    nestedMfa.mfaToken ||
+    nestedMfa.ticket ||
+    nestedMfa.sessionToken ||
+    '';
+
+  const isMfaRequired = Boolean(
+    data.mfaRequired ||
+    data.requiresMfa ||
+    nestedMfa.required ||
+    nestedMfa.mfaRequired ||
+    challengeData.required ||
+    challengeToken ||
+    methods.length > 0 ||
+    String(errorType).toUpperCase().includes('MFA') ||
+    String(errorType).toUpperCase().includes('TOTP')
+  );
+
+  if (!isMfaRequired) {
+    return null;
+  }
+
+  return {
+    challengeToken,
+    challengeType: data.challengeType || challengeData.challengeType || nestedMfa.challengeType || 'totp',
+    methods,
+    availableMethods: methods,
+    hint:
+      data.challengeHint ||
+      data.maskedAccount ||
+      challengeData.challengeHint ||
+      challengeData.maskedAccount ||
+      nestedMfa.challengeHint ||
+      nestedMfa.maskedAccount ||
+      '',
+    recoveryAvailable: Boolean(
+      data.recoveryAvailable ??
+      data.recoveryCodesAvailable ??
+      challengeData.recoveryAvailable ??
+      challengeData.recoveryCodesAvailable ??
+      nestedMfa.recoveryAvailable ??
+      nestedMfa.recoveryCodesAvailable ??
+      methods.includes('recovery_code')
+    ),
+    message: data.msg || data.message || nestedMfa.message || '需要进行二次验证'
+  };
+}
 
 // ==============================|| AUTH PROVIDER ||============================== //
 
@@ -82,39 +163,29 @@ export function AuthProvider({ children }) {
       resetHeartbeat();
     });
 
-    eventSource.addEventListener('task_update', (event) => {
-      resetHeartbeat();
-      try {
-        const data = JSON.parse(event.data);
-        const status = data.status || data.data?.status;
-        const notification = {
-          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          type: status === 'success' ? 'success' : 'error',
-          title: data.title || (status === 'success' ? '成功' : '失败'),
-          message: data.message,
-          timestamp: new Date()
-        };
-        setNotifications((prev) => [notification, ...prev].slice(0, 50));
-      } catch (e) {
-        console.error('解析 SSE 消息失败', e);
-      }
-    });
+    const appendNotification = (data) => {
+      const parsedTimestamp = data.time ? new Date(data.time.replace(' ', 'T')) : new Date();
+      const timestamp = Number.isNaN(parsedTimestamp.getTime()) ? new Date() : parsedTimestamp;
+      const notification = {
+        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        type: data.severity || data.type || 'info',
+        title: data.title || data.eventName || '通知',
+        message: data.message || '',
+        timestamp,
+        eventKey: data.event || '',
+        eventName: data.eventName || '',
+        category: data.category || '',
+        categoryName: data.categoryName || ''
+      };
+      setNotifications((prev) => [notification, ...prev].slice(0, 50));
+    };
 
-    eventSource.addEventListener('sub_update', (event) => {
+    eventSource.addEventListener('notification', (event) => {
       resetHeartbeat();
       try {
-        const data = JSON.parse(event.data);
-        const status = data.status || data.data?.status;
-        const notification = {
-          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          type: status === 'success' ? 'success' : 'error',
-          title: data.title || (status === 'success' ? '订阅更新成功' : '订阅更新失败'),
-          message: data.message,
-          timestamp: new Date()
-        };
-        setNotifications((prev) => [notification, ...prev].slice(0, 50));
+        appendNotification(JSON.parse(event.data));
       } catch (e) {
-        console.error('解析 SSE sub_update 消息失败', e);
+        console.error('解析 SSE notification 消息失败', e);
       }
     });
 
@@ -142,7 +213,11 @@ export function AuthProvider({ children }) {
           type: data.type || 'info',
           title: data.title || '通知',
           message: data.message || JSON.stringify(data),
-          timestamp: new Date()
+          timestamp: new Date(),
+          eventKey: data.event || '',
+          eventName: data.eventName || '',
+          category: data.category || '',
+          categoryName: data.categoryName || ''
         };
         setNotifications((prev) => [notification, ...prev].slice(0, 50));
       } catch (e) {
@@ -164,6 +239,24 @@ export function AuthProvider({ children }) {
       }, 5000);
     };
   }, [resetHeartbeat]);
+
+  const finalizeAuth = useCallback(
+    async ({ accessToken, tokenType, rememberMe = false, username = '' }) => {
+      localStorage.setItem('accessToken', `${tokenType} ${accessToken}`);
+
+      if (rememberMe) {
+        localStorage.setItem(REMEMBERED_USERNAME_KEY, username);
+      } else {
+        localStorage.removeItem(REMEMBERED_USERNAME_KEY);
+      }
+
+      const userResponse = await getUserInfo();
+      setUser(userResponse.data);
+      setIsAuthenticated(true);
+      connectSSE();
+    },
+    [connectSSE]
+  );
 
   // 断开 SSE
   const disconnectSSE = useCallback(() => {
@@ -194,70 +287,62 @@ export function AuthProvider({ children }) {
           console.error('获取用户信息失败:', error);
           localStorage.removeItem('accessToken');
           setIsAuthenticated(false);
-
-          // 尝试使用记住密码令牌自动登录
-          await tryRememberLogin();
         }
-      } else {
-        // 没有 accessToken，尝试使用记住密码令牌登录
-        await tryRememberLogin();
       }
       setIsInitialized(true);
     };
 
     initAuth();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectSSE]);
-
-  // 尝试使用记住密码令牌自动登录
-  const tryRememberLogin = async () => {
-    const rememberToken = localStorage.getItem(REMEMBER_TOKEN_KEY);
-    if (!rememberToken) return false;
-
-    try {
-      const response = await rememberLoginApi(rememberToken);
-      const { tokenType, accessToken } = response.data;
-      localStorage.setItem('accessToken', `${tokenType} ${accessToken}`);
-
-      const userResponse = await getUserInfo();
-      setUser(userResponse.data);
-      setIsAuthenticated(true);
-      connectSSE();
-      return true;
-    } catch (error) {
-      console.error('记住密码自动登录失败:', error);
-      // 令牌无效，清除它
-      localStorage.removeItem(REMEMBER_TOKEN_KEY);
-      return false;
-    }
-  };
 
   // 登录 - 支持验证码和记住密码
   const login = async (username, password, captchaKey, captchaCode, rememberMe = false, turnstileToken = '') => {
     try {
       const response = await loginApi({ username, password, captchaKey, captchaCode, rememberMe, turnstileToken });
 
-      // 登录成功（code === 200，否则会被 request.js 拦截器 reject）
-      const { tokenType, accessToken, rememberToken } = response.data;
-      localStorage.setItem('accessToken', `${tokenType} ${accessToken}`);
+      const tokenPayload = normalizeTokenPayload(response);
+      if (tokenPayload) {
+        await finalizeAuth({ ...tokenPayload, rememberMe, username });
 
-      // 如果返回了 rememberToken，保存它
-      if (rememberToken) {
-        localStorage.setItem(REMEMBER_TOKEN_KEY, rememberToken);
-      } else {
-        // 没有勾选记住密码，清除旧的令牌
-        localStorage.removeItem(REMEMBER_TOKEN_KEY);
+        return { success: true };
       }
 
-      // 获取用户信息
-      const userResponse = await getUserInfo();
-      setUser(userResponse.data);
-      setIsAuthenticated(true);
-      connectSSE();
+      const challenge = normalizeMfaChallenge(response);
+      if (challenge) {
+        localStorage.removeItem('accessToken');
+        disconnectSSE();
+        setUser(null);
+        setIsAuthenticated(false);
 
-      return { success: true };
+        return {
+          success: false,
+          mfaRequired: true,
+          challenge,
+          message: challenge.message
+        };
+      }
+
+      return {
+        success: false,
+        message: '登录响应缺少访问令牌，请稍后重试'
+      };
     } catch (error) {
       console.error('登录失败:', error);
+      const challenge = normalizeMfaChallenge(error.data);
+      if (challenge) {
+        localStorage.removeItem('accessToken');
+        disconnectSSE();
+        setUser(null);
+        setIsAuthenticated(false);
+
+        return {
+          success: false,
+          mfaRequired: true,
+          challenge,
+          message: challenge.message
+        };
+      }
+
       // 业务错误通过 error.message (来自后端 msg) 和 error.data 获取
       return {
         success: false,
@@ -267,17 +352,43 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const verifyMfa = async ({ challengeToken, code, recoveryCode, type = 'totp', rememberMe = false, username = '' }) => {
+    try {
+      const response = await verifyMfaLogin({
+        challengeToken,
+        code,
+        recoveryCode,
+        type
+      });
+
+      const tokenPayload = normalizeTokenPayload(response);
+      if (!tokenPayload) {
+        return {
+          success: false,
+          message: '验证成功，但未收到访问令牌'
+        };
+      }
+
+      await finalizeAuth({ ...tokenPayload, rememberMe, username });
+      return { success: true };
+    } catch (error) {
+      console.error('MFA 验证失败:', error);
+      return {
+        success: false,
+        message: error.message || '验证失败，请检查验证码或恢复码后重试',
+        errorType: error.data?.data?.errorType || null
+      };
+    }
+  };
+
   // 登出
   const logout = async () => {
-    // 获取当前的 rememberToken，用于后端删除
-    const rememberToken = localStorage.getItem(REMEMBER_TOKEN_KEY);
     try {
-      await logoutApi(rememberToken);
+      await logoutApi();
     } catch (error) {
       console.error('登出API调用失败:', error);
     } finally {
       localStorage.removeItem('accessToken');
-      localStorage.removeItem(REMEMBER_TOKEN_KEY); // 登出时清除记住密码令牌
       setUser(null);
       setIsAuthenticated(false);
       disconnectSSE();
@@ -301,7 +412,9 @@ export function AuthProvider({ children }) {
       isInitialized,
       notifications,
       login,
+      verifyMfa,
       logout,
+      rememberedUsernameKey: REMEMBERED_USERNAME_KEY,
       clearNotification,
       clearAllNotifications
     }),

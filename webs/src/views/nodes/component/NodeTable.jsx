@@ -6,6 +6,7 @@ import Checkbox from '@mui/material/Checkbox';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
@@ -21,10 +22,18 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import SpeedIcon from '@mui/icons-material/Speed';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
 // utils
-import { formatDateTime, formatCountry, getDelayDisplay, getSpeedDisplay } from '../utils';
+import {
+  formatDateTime,
+  formatCountry,
+  getDelayDisplay,
+  getFraudScoreDisplay,
+  getIpTypeDisplay,
+  getQualityStatusDisplay,
+  getResidentialDisplay,
+  getSpeedDisplay
+} from '../utils';
 
 /**
  * 桌面端节点表格（精简版）
@@ -48,10 +57,25 @@ export default function NodeTable({
   onViewDetails
 }) {
   const isSelected = (node) => selectedNodes.some((n) => n.ID === node.ID);
+  const denseCellSx = {
+    px: 0.75,
+    py: 0.75,
+    whiteSpace: 'nowrap',
+    verticalAlign: 'top'
+  };
 
   return (
     <TableContainer component={Paper}>
-      <Table size="small">
+      <Table
+        size="small"
+        sx={{
+          '& .MuiTableCell-root': denseCellSx,
+          '& .MuiTableCell-paddingCheckbox': { px: 0.5, py: 0.5 },
+          '& .MuiChip-root': { height: 22 },
+          '& .MuiChip-label': { px: 0.75 },
+          '& .MuiIconButton-root': { p: 0.5 }
+        }}
+      >
         <TableHead>
           <TableRow>
             <TableCell padding="checkbox">
@@ -61,30 +85,31 @@ export default function NodeTable({
                 onChange={onSelectAll}
               />
             </TableCell>
-            <TableCell sx={{ minWidth: 150 }}>备注</TableCell>
-            <TableCell sx={{ minWidth: 100 }}>分组</TableCell>
-            <TableCell sx={{ minWidth: 100 }}>来源</TableCell>
-            <TableCell sx={{ minWidth: 100, whiteSpace: 'nowrap' }}>标签</TableCell>
-            <TableCell sortDirection={sortBy === 'delay' ? sortOrder : false}>
-              <TableSortLabel
-                active={sortBy === 'delay'}
-                direction={sortBy === 'delay' ? sortOrder : 'asc'}
-                onClick={() => onSort('delay')}
-              >
-                延迟
-              </TableSortLabel>
+            <TableCell sx={{ minWidth: 132 }}>备注</TableCell>
+            <TableCell sx={{ minWidth: 88 }}>分组</TableCell>
+            <TableCell sx={{ minWidth: 88 }}>来源</TableCell>
+            <TableCell sx={{ minWidth: 92, whiteSpace: 'nowrap' }}>标签</TableCell>
+            <TableCell sx={{ minWidth: 64, whiteSpace: 'nowrap' }}>国家</TableCell>
+            <TableCell sx={{ minWidth: 168 }} sortDirection={sortBy === 'delay' || sortBy === 'speed' ? sortOrder : false}>
+              <Stack direction="row" spacing={1.5} alignItems="center" sx={{ whiteSpace: 'nowrap' }}>
+                <TableSortLabel
+                  active={sortBy === 'delay'}
+                  direction={sortBy === 'delay' ? sortOrder : 'asc'}
+                  onClick={() => onSort('delay')}
+                >
+                  延迟
+                </TableSortLabel>
+                <TableSortLabel
+                  active={sortBy === 'speed'}
+                  direction={sortBy === 'speed' ? sortOrder : 'asc'}
+                  onClick={() => onSort('speed')}
+                >
+                  速度
+                </TableSortLabel>
+              </Stack>
             </TableCell>
-            <TableCell sortDirection={sortBy === 'speed' ? sortOrder : false}>
-              <TableSortLabel
-                active={sortBy === 'speed'}
-                direction={sortBy === 'speed' ? sortOrder : 'asc'}
-                onClick={() => onSort('speed')}
-              >
-                速度
-              </TableSortLabel>
-            </TableCell>
-            <TableCell sx={{ minWidth: 80, whiteSpace: 'nowrap' }}>国家</TableCell>
-            <TableCell align="right" sx={{ minWidth: 180 }}>
+            <TableCell sx={{ minWidth: 128, whiteSpace: 'nowrap' }}>IP特征</TableCell>
+            <TableCell align="right" sx={{ minWidth: 104, pr: 0.5 }}>
               操作
             </TableCell>
           </TableRow>
@@ -111,7 +136,7 @@ export default function NodeTable({
                     variant="body2"
                     fontWeight="medium"
                     sx={{
-                      maxWidth: '200px',
+                      maxWidth: '180px',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap'
@@ -129,7 +154,7 @@ export default function NodeTable({
                       color="warning"
                       variant="outlined"
                       size="small"
-                      sx={{ maxWidth: '120px', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
+                      sx={{ maxWidth: '104px', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
                     />
                   </Tooltip>
                 ) : (
@@ -146,7 +171,7 @@ export default function NodeTable({
                       color="info"
                       variant="outlined"
                       size="small"
-                      sx={{ maxWidth: '120px', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
+                      sx={{ maxWidth: '104px', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
                     />
                   </Tooltip>
                 ) : (
@@ -157,7 +182,7 @@ export default function NodeTable({
               </TableCell>
               <TableCell>
                 {node.Tags ? (
-                  <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', maxWidth: 200 }}>
+                  <Box sx={{ display: 'flex', gap: 0.375, flexWrap: 'wrap', maxWidth: 180 }}>
                     {node.Tags.split(',')
                       .filter((t) => t.trim())
                       .map((tag, idx) => {
@@ -170,7 +195,7 @@ export default function NodeTable({
                             size="small"
                             sx={{
                               fontSize: '10px',
-                              height: 20,
+                              height: 18,
                               backgroundColor: tagColor,
                               color: '#fff'
                             }}
@@ -185,44 +210,143 @@ export default function NodeTable({
                 )}
               </TableCell>
               <TableCell>
-                <Box>
-                  {(() => {
-                    const d = getDelayDisplay(node.DelayTime, node.DelayStatus);
-                    return <Chip label={d.label} color={d.color} variant={d.variant} size="small" />;
-                  })()}
-                  {node.LatencyCheckAt && (
-                    <Typography variant="caption" color="textSecondary" sx={{ display: 'block', fontSize: '10px', mt: 0.5 }}>
-                      {formatDateTime(node.LatencyCheckAt)}
-                    </Typography>
-                  )}
-                </Box>
-              </TableCell>
-              <TableCell>
-                <Box>
-                  {(() => {
-                    const s = getSpeedDisplay(node.Speed, node.SpeedStatus);
-                    return <Chip label={s.label} color={s.color} variant={s.variant} size="small" />;
-                  })()}
-                  {node.SpeedCheckAt && node.Speed > 0 && (
-                    <Typography variant="caption" color="textSecondary" sx={{ display: 'block', fontSize: '10px', mt: 0.5 }}>
-                      {formatDateTime(node.SpeedCheckAt)}
-                    </Typography>
-                  )}
-                </Box>
-              </TableCell>
-              <TableCell>
                 {node.LinkCountry ? (
                   <Chip label={formatCountry(node.LinkCountry)} color="secondary" variant="outlined" size="small" />
                 ) : (
                   '-'
                 )}
               </TableCell>
-              <TableCell align="right">
-                <Tooltip title="详情">
-                  <IconButton size="small" onClick={() => onViewDetails(node)} color="info">
-                    <InfoOutlinedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+              <TableCell>
+                <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+                  <Stack direction="row" spacing={0.75} alignItems="flex-start" flexWrap="wrap" useFlexGap>
+                    <Box>
+                      {(() => {
+                        const d = getDelayDisplay(node.DelayTime, node.DelayStatus);
+                        return <Chip label={d.label} color={d.color} variant={d.variant} size="small" />;
+                      })()}
+                      {node.LatencyCheckAt && (
+                        <Typography
+                          variant="caption"
+                          color="textSecondary"
+                          sx={{ display: 'block', fontSize: '10px', mt: 0.25, lineHeight: 1.2 }}
+                        >
+                          {formatDateTime(node.LatencyCheckAt)}
+                        </Typography>
+                      )}
+                    </Box>
+                    <Box>
+                      {(() => {
+                        const s = getSpeedDisplay(node.Speed, node.SpeedStatus);
+                        return <Chip label={s.label} color={s.color} variant={s.variant} size="small" />;
+                      })()}
+                      {node.SpeedCheckAt && node.Speed > 0 && (
+                        <Typography
+                          variant="caption"
+                          color="textSecondary"
+                          sx={{ display: 'block', fontSize: '10px', mt: 0.25, lineHeight: 1.2 }}
+                        >
+                          {formatDateTime(node.SpeedCheckAt)}
+                        </Typography>
+                      )}
+                    </Box>
+                  </Stack>
+                </Stack>
+              </TableCell>
+              <TableCell>
+                {(() => {
+                  const ipTypeDisplay = getIpTypeDisplay(node.IsBroadcast, node.QualityStatus, node.QualityFamily);
+                  const residentialDisplay = getResidentialDisplay(node.IsResidential, node.QualityStatus, node.QualityFamily);
+                  const fraudScoreDisplay = getFraudScoreDisplay(node.FraudScore, node.QualityStatus, node.QualityFamily);
+                  const qualityStatusDisplay = getQualityStatusDisplay(node.QualityStatus, node.QualityFamily);
+                  const isUntested =
+                    ipTypeDisplay.label === '未检测' && residentialDisplay.label === '未检测' && fraudScoreDisplay.label === '未检测';
+                  const shouldMergeQualityTags =
+                    node.QualityStatus !== 'success' &&
+                    ipTypeDisplay.label === residentialDisplay.label &&
+                    residentialDisplay.label === fraudScoreDisplay.label;
+
+                  return (
+                    <Box sx={{ display: 'flex', gap: 0.375, flexWrap: 'wrap', minWidth: 0, maxWidth: 160 }}>
+                      {isUntested ? (
+                        <Chip label="未检测" color="default" variant="outlined" size="small" />
+                      ) : shouldMergeQualityTags ? (
+                        qualityStatusDisplay.tooltip ? (
+                          <Tooltip title={qualityStatusDisplay.tooltip}>
+                            <Chip
+                              label={qualityStatusDisplay.label}
+                              color={qualityStatusDisplay.color}
+                              variant={qualityStatusDisplay.variant}
+                              size="small"
+                            />
+                          </Tooltip>
+                        ) : (
+                          <Chip
+                            label={qualityStatusDisplay.label}
+                            color={qualityStatusDisplay.color}
+                            variant={qualityStatusDisplay.variant}
+                            size="small"
+                          />
+                        )
+                      ) : (
+                        <>
+                          {ipTypeDisplay.tooltip ? (
+                            <Tooltip title={ipTypeDisplay.tooltip}>
+                              <Chip label={ipTypeDisplay.label} color={ipTypeDisplay.color} variant={ipTypeDisplay.variant} size="small" />
+                            </Tooltip>
+                          ) : (
+                            <Chip label={ipTypeDisplay.label} color={ipTypeDisplay.color} variant={ipTypeDisplay.variant} size="small" />
+                          )}
+                          {residentialDisplay.tooltip ? (
+                            <Tooltip title={residentialDisplay.tooltip}>
+                              <Chip
+                                label={residentialDisplay.label}
+                                color={residentialDisplay.color}
+                                variant={residentialDisplay.variant}
+                                size="small"
+                              />
+                            </Tooltip>
+                          ) : (
+                            <Chip
+                              label={residentialDisplay.label}
+                              color={residentialDisplay.color}
+                              variant={residentialDisplay.variant}
+                              size="small"
+                            />
+                          )}
+                          {fraudScoreDisplay.tooltip ? (
+                            <Tooltip title={fraudScoreDisplay.tooltip}>
+                              <Chip
+                                label={
+                                  node.QualityStatus === 'success'
+                                    ? fraudScoreDisplay.label
+                                    : fraudScoreDisplay.detailLabel || fraudScoreDisplay.label
+                                }
+                                color={fraudScoreDisplay.color}
+                                variant={fraudScoreDisplay.variant}
+                                size="small"
+                                sx={fraudScoreDisplay.sx}
+                              />
+                            </Tooltip>
+                          ) : (
+                            <Chip
+                              label={
+                                node.QualityStatus === 'success'
+                                  ? fraudScoreDisplay.label
+                                  : fraudScoreDisplay.detailLabel || fraudScoreDisplay.label
+                              }
+                              color={fraudScoreDisplay.color}
+                              variant={fraudScoreDisplay.variant}
+                              size="small"
+                              sx={fraudScoreDisplay.sx}
+                            />
+                          )}
+                        </>
+                      )}
+                    </Box>
+                  );
+                })()}
+              </TableCell>
+              <TableCell align="right" sx={{ pr: 0.5 }}>
                 <Tooltip title="检测">
                   <IconButton size="small" onClick={() => onSpeedTest(node)}>
                     <SpeedIcon fontSize="small" />

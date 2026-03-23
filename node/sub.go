@@ -15,7 +15,7 @@ import (
 	"sublink/models"
 	"sublink/node/protocol"
 	"sublink/services/mihomo"
-	"sublink/services/sse"
+	"sublink/services/notifications"
 	"sublink/utils"
 	"time"
 
@@ -187,20 +187,15 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 							return nil, fmt.Errorf("split host port error: %v", splitErr)
 						}
 
-						portInt, atoiErr := strconv.Atoi(portStr)
-						if atoiErr != nil {
-							return nil, fmt.Errorf("invalid port: %v", atoiErr)
-						}
-
-						// 验证端口范围
-						if portInt < 0 || portInt > 65535 {
-							return nil, fmt.Errorf("port out of range: %d", portInt)
+						portUint, parseErr := strconv.ParseUint(portStr, 10, 16)
+						if parseErr != nil {
+							return nil, fmt.Errorf("invalid port: %v", parseErr)
 						}
 
 						// 创建 mihomo metadata
 						metadata := &constant.Metadata{
 							Host:    host,
-							DstPort: uint16(portInt),
+							DstPort: uint16(portUint),
 							Type:    constant.HTTP,
 						}
 
@@ -244,14 +239,13 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 			message = fmt.Sprintf("❌订阅【%s】请求失败: %v", subName, err)
 		}
 		// 发送请求失败通知
-		sse.GetSSEBroker().BroadcastEvent("sub_update", sse.NotificationPayload{
-			Event:   "sub_update",
+		notifications.Publish("subscription.sync_failed", notifications.Payload{
 			Title:   title,
 			Message: message,
 			Data: map[string]interface{}{
 				"id":       id,
 				"name":     subName,
-				"status":   "failed",
+				"status":   "error",
 				"error":    err.Error(),
 				"tlsError": isTLSError(err),
 			},
@@ -285,14 +279,13 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 	if err != nil {
 		utils.Error("URL %s，读取Clash配置失败:  %v", urlStr, err)
 		// 发送读取失败通知
-		sse.GetSSEBroker().BroadcastEvent("sub_update", sse.NotificationPayload{
-			Event:   "sub_update",
+		notifications.Publish("subscription.sync_failed", notifications.Payload{
 			Title:   "订阅更新失败",
 			Message: fmt.Sprintf("❌订阅【%s】读取响应失败: %v", subName, err),
 			Data: map[string]interface{}{
 				"id":     id,
 				"name":   subName,
-				"status": "failed",
+				"status": "error",
 				"error":  err.Error(),
 			},
 		})
@@ -345,14 +338,13 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 	if len(config.Proxies) == 0 {
 		utils.Error("URL %s，解析失败或未找到节点 (YAML error: %v)", urlStr, errYaml)
 		// 发送解析失败通知
-		sse.GetSSEBroker().BroadcastEvent("sub_update", sse.NotificationPayload{
-			Event:   "sub_update",
+		notifications.Publish("subscription.sync_failed", notifications.Payload{
 			Title:   "订阅更新失败",
 			Message: fmt.Sprintf("❌订阅【%s】解析失败或未找到节点", subName),
 			Data: map[string]interface{}{
 				"id":     id,
 				"name":   subName,
-				"status": "failed",
+				"status": "error",
 				"error":  "解析失败或未找到节点",
 			},
 		})
@@ -771,8 +763,7 @@ func scheduleClashToNodeLinks(id int, proxys []protocol.Proxy, subName string, r
 		nData["usage"] = usageData
 	}
 
-	sse.GetSSEBroker().BroadcastEvent("sub_update", sse.NotificationPayload{
-		Event:   "sub_update",
+	notifications.Publish("subscription.sync_succeeded", notifications.Payload{
 		Title:   "订阅更新完成",
 		Message: fmt.Sprintf("✅订阅【%s】节点同步完成，耗时 %s，总节点【%d】个，成功处理【%d】个，新增节点【%d】个，更新节点【%d】个，已存在节点【%d】个，删除失效【%d】个%s", subName, durationStr, len(proxys), addSuccessCount+skipCount, addSuccessCount, actualUpdateCount, skipCount, deleteCount, usageText),
 		Data:    nData,

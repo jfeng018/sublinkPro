@@ -56,9 +56,9 @@
 
 | 功能 | 说明 | 详情 |
 |:---|:---|:---:|
-| 🏷️ **智能标签系统** | 自动规则打标签、零代码筛选、标签互斥组 | [📖](docs/features/tags.md) |
-| ⚡ **专业测速系统** | 双阶段测试、智能延迟测量、自动状态标记 | [📖](docs/features/speedtest.md) |
-| 🔗 **链式代理** | Dialer-Proxy 原生支持、可视化配置、拯救被墙节点 | [📖](docs/features/chain-proxy.md) |
+| 🏷️ **智能标签系统** | 自动规则打标签、零代码筛选、支持 IP 质量条件 | [📖](docs/features/tags.md) |
+| ⚡ **专业测速系统** | 双阶段测试、智能延迟测量、支持 IP 质量检测 | [📖](docs/features/speedtest.md) |
+| 🔗 **链式代理** | Dialer-Proxy 原生支持、可视化配置、支持按 IP 质量选节点 | [📖](docs/features/chain-proxy.md) |
 | ✈️ **机场管理** | 多格式导入、定时更新、流量监控、一键全量拉取 | [📖](docs/features/airport.md) |
 | 🗂️ **分组排序** | 分组内机场优先级拖拽排序，控制订阅输出中的节点顺序 | - |
 | 📋 **订阅分享** | 多链接管理、过期策略、访问统计 | [📖](docs/features/subscription-share.md) |
@@ -98,8 +98,30 @@ docker-compose up -d
 
 访问 `http://localhost:8000`，使用默认账号 `admin` / `123456` 登录。
 
+默认使用 SQLite；如需切换到 MySQL 或 PostgreSQL，可通过 `SUBLINK_DSN`、配置文件 `dsn:` 或命令行 `--dsn` 指定数据库连接，示例见 [⚙️ 配置说明](docs/configuration.md)。
+
 > [!TIP]
 > 更多安装方式（Docker、一键脚本、更新升级等）请参阅 [📦 安装部署指南](docs/installation.md)
+
+### 从 SQLite 迁移到 MySQL / PostgreSQL
+
+如果您早期使用的是 SQLite，现在希望迁移到 MySQL 或 PostgreSQL，建议按以下流程操作：
+
+1. 在旧的 SQLite 实例中登录后台，点击右上角头像菜单中的 **系统备份**，导出 `backup.zip`
+2. 在新实例中配置好 MySQL 或 PostgreSQL 的 `DSN`，并确保目标库是一个全新的空库
+3. 启动新实例后，进入 `设置 -> 数据迁移`
+4. 上传旧实例导出的 `backup.zip`
+5. 根据需要选择是否迁移 `AccessKey`、订阅访问日志，然后开始迁移
+6. 迁移完成后，**请手动重启项目实例**，再重新登录检查数据
+
+> [!IMPORTANT]
+> 推荐使用 `backup.zip` 迁移。直接上传 `.db` 只会迁移数据库记录，不会恢复模板目录。
+
+> [!NOTE]
+> 如果迁移了 `AccessKey`，请确保新旧实例使用相同的 `API 加密密钥`；否则旧 API Key 可能无法继续使用。
+
+> [!TIP]
+> 如果迁移完成后提示“有 N 条警告”，可以到 `任务中心` 打开对应的“数据库迁移”任务查看详细警告内容。
 
 ---
 
@@ -116,14 +138,15 @@ docker-compose up -d
 
 | 文档 | 说明 |
 |:---|:---|
-| [🏷️ 智能标签系统](docs/features/tags.md) | 自动规则打标签、零代码筛选、标签互斥组 |
-| [⚡ 测速系统](docs/features/speedtest.md) | 测速原理、参数配置、流量计算 |
-| [🔗 链式代理](docs/features/chain-proxy.md) | Dialer-Proxy、使用场景、配置流程 |
+| [🏷️ 智能标签系统](docs/features/tags.md) | 自动规则打标签、零代码筛选、IP 质量规则 |
+| [⚡ 测速系统](docs/features/speedtest.md) | 测速原理、IP 质量检测、参数配置 |
+| [🔗 链式代理](docs/features/chain-proxy.md) | Dialer-Proxy、条件选节点、配置流程 |
 | [✈️ 机场管理](docs/features/airport.md) | 订阅导入、定时更新、流量监控 |
 | [📋 订阅分享](docs/features/subscription-share.md) | 多链接管理、过期策略、访问统计 |
 | [🌐 Host 管理](docs/features/host.md) | 域名映射、DNS 配置、测速持久化 |
 | [🤖 Telegram 机器人](docs/features/telegram-bot.md) | 命令列表、配置指南 |
 | [📜 脚本功能](docs/script_support.md) | 节点过滤、内容后处理、函数参考 |
+| [🔐 双重验证（MFA）](docs/features/mfa.md) | TOTP 设置、恢复码、应急重置流程 |
 
 ### 👨‍💻 开发者
 

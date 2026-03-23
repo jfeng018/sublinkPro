@@ -414,6 +414,14 @@ func getNodeFieldValue(node Node, field string) interface{} {
 		return node.DelayStatus
 	case "dialer_proxy_name":
 		return node.DialerProxyName
+	case "fraud_score":
+		return node.FraudScore
+	case "quality_status":
+		return getNodeQualityStatusValue(node)
+	case "ip_type":
+		return getNodeIPTypeValue(node)
+	case "residential_type":
+		return getNodeResidentialTypeValue(node)
 	case "link":
 		return node.Link
 	case "tags":

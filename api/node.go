@@ -13,6 +13,33 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func normalizeResidentialType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "residential", "datacenter", "untested":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeQualityStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.QualityStatusUntested, models.QualityStatusSuccess, models.QualityStatusPartial, models.QualityStatusFailed, models.QualityStatusDisabled:
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeIPType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "native", "broadcast", "untested":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
 func NodeUpdadte(c *gin.Context) {
 	var Node models.Node
 	name := c.PostForm("name")
@@ -298,11 +325,26 @@ func NodeGet(c *gin.Context) {
 		}
 	}
 
+	if maxFraudScoreStr := c.Query("maxFraudScore"); maxFraudScoreStr != "" {
+		if maxFraudScore, err := strconv.Atoi(maxFraudScoreStr); err == nil && maxFraudScore > 0 {
+			filter.MaxFraudScore = maxFraudScore
+		}
+	}
+
 	// 解析国家代码数组
 	filter.Countries = c.QueryArray("countries[]")
 
 	// 解析标签数组
 	filter.Tags = c.QueryArray("tags[]")
+	filter.ResidentialType = normalizeResidentialType(c.Query("residentialType"))
+	filter.IPType = normalizeIPType(c.Query("ipType"))
+	filter.QualityStatus = normalizeQualityStatus(c.Query("qualityStatus"))
+	if filter.ResidentialType == "" && c.Query("onlyResidential") == "true" {
+		filter.ResidentialType = "residential"
+	}
+	if filter.IPType == "" && c.Query("onlyNative") == "true" {
+		filter.IPType = "native"
+	}
 
 	// 验证排序字段（白名单）
 	if filter.SortBy != "" && filter.SortBy != "delay" && filter.SortBy != "speed" {
@@ -387,11 +429,26 @@ func NodeGetIDs(c *gin.Context) {
 		}
 	}
 
+	if maxFraudScoreStr := c.Query("maxFraudScore"); maxFraudScoreStr != "" {
+		if maxFraudScore, err := strconv.Atoi(maxFraudScoreStr); err == nil && maxFraudScore > 0 {
+			filter.MaxFraudScore = maxFraudScore
+		}
+	}
+
 	// 解析国家代码数组
 	filter.Countries = c.QueryArray("countries[]")
 
 	// 解析标签数组
 	filter.Tags = c.QueryArray("tags[]")
+	filter.ResidentialType = normalizeResidentialType(c.Query("residentialType"))
+	filter.IPType = normalizeIPType(c.Query("ipType"))
+	filter.QualityStatus = normalizeQualityStatus(c.Query("qualityStatus"))
+	if filter.ResidentialType == "" && c.Query("onlyResidential") == "true" {
+		filter.ResidentialType = "residential"
+	}
+	if filter.IPType == "" && c.Query("onlyNative") == "true" {
+		filter.IPType = "native"
+	}
 
 	ids, err := Node.GetFilteredNodeIDs(filter)
 	if err != nil {
@@ -756,15 +813,25 @@ func NodesTotal(c *gin.Context) {
 
 	total := len(nodes)
 	available := 0
+	delayPassCount := 0
+	speedPassCount := 0
 	for _, n := range nodes {
+		if n.DelayStatus == "success" && n.DelayTime > 0 {
+			delayPassCount++
+		}
+		if n.SpeedStatus == "success" && n.Speed > 0 {
+			speedPassCount++
+		}
 		if n.Speed > 0 && n.DelayTime > 0 {
 			available++
 		}
 	}
 
 	utils.OkDetailed(c, "取得节点统计", gin.H{
-		"total":     total,
-		"available": available,
+		"total":          total,
+		"available":      available,
+		"delayPassCount": delayPassCount,
+		"speedPassCount": speedPassCount,
 	})
 }
 
@@ -925,6 +992,11 @@ func NodeCountryStats(c *gin.Context) {
 	utils.OkDetailed(c, "获取国家统计成功", stats)
 }
 
+func DashboardCountryStats(c *gin.Context) {
+	stats := models.GetDashboardCountryStats()
+	utils.OkDetailed(c, "获取仪表盘国家统计成功", stats)
+}
+
 // NodeProtocolStats 获取按协议统计的节点数量
 func NodeProtocolStats(c *gin.Context) {
 	stats := models.GetNodeProtocolStats()
@@ -947,6 +1019,16 @@ func NodeGroupStats(c *gin.Context) {
 func NodeSourceStats(c *gin.Context) {
 	stats := models.GetNodeSourceStats()
 	utils.OkDetailed(c, "获取来源统计成功", stats)
+}
+
+func DashboardGroupedStats(c *gin.Context) {
+	stats := models.GetDashboardGroupedStats()
+	utils.OkDetailed(c, "获取仪表盘分组统计成功", stats)
+}
+
+func DashboardQualityStats(c *gin.Context) {
+	stats := models.GetDashboardQualityStats()
+	utils.OkDetailed(c, "获取仪表盘质量统计成功", stats)
 }
 
 // GetIPDetails 获取IP详细信息

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 // material-ui
 import { useTheme } from '@mui/material/styles';
@@ -13,7 +13,7 @@ import Tooltip from '@mui/material/Tooltip';
 
 // icons
 import AddIcon from '@mui/icons-material/Add';
-import DownloadIcon from '@mui/icons-material/Download';
+import FlightIcon from '@mui/icons-material/Flight';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SpeedIcon from '@mui/icons-material/Speed';
@@ -75,7 +75,46 @@ import { SPEED_TEST_TCP_OPTIONS, SPEED_TEST_MIHOMO_OPTIONS } from './utils';
 export default function NodeList() {
   const theme = useTheme();
   const matchDownMd = useMediaQuery(theme.breakpoints.down('md'));
+  const location = useLocation();
   const navigate = useNavigate();
+
+  const getSourceFilterFromQuery = useCallback((search) => {
+    try {
+      const params = new URLSearchParams(search);
+      return params.get('source')?.trim() || '';
+    } catch (error) {
+      console.error('解析节点来源筛选参数失败:', error);
+      return '';
+    }
+  }, []);
+
+  const syncSourceFilterToQuery = useCallback(
+    (nextSource) => {
+      const params = new URLSearchParams(location.search);
+      const currentSource = params.get('source')?.trim() || '';
+      const normalizedSource = nextSource?.trim() || '';
+
+      if (currentSource === normalizedSource) {
+        return;
+      }
+
+      if (normalizedSource) {
+        params.set('source', normalizedSource);
+      } else {
+        params.delete('source');
+      }
+
+      const search = params.toString();
+      navigate(
+        {
+          pathname: location.pathname,
+          search: search ? `?${search}` : ''
+        },
+        { replace: true }
+      );
+    },
+    [location.pathname, location.search, navigate]
+  );
 
   // Task progress for auto-refresh
   const { registerOnComplete, unregisterOnComplete } = useTaskProgress();
@@ -120,12 +159,16 @@ export default function NodeList() {
   // 过滤器
   const [searchQuery, setSearchQuery] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState(() => getSourceFilterFromQuery(window.location.search));
   const [maxDelay, setMaxDelay] = useState('');
   const [minSpeed, setMinSpeed] = useState('');
+  const [maxFraudScore, setMaxFraudScore] = useState('');
   const [speedStatusFilter, setSpeedStatusFilter] = useState('');
   const [delayStatusFilter, setDelayStatusFilter] = useState('');
   const [protocolFilter, setProtocolFilter] = useState('');
+  const [residentialType, setResidentialType] = useState('');
+  const [ipType, setIpType] = useState('');
+  const [qualityStatus, setQualityStatus] = useState('');
 
   // 排序
   const [sortBy, setSortBy] = useState(''); // 'delay' | 'speed' | ''
@@ -234,9 +277,13 @@ export default function NodeList() {
       if (filterParams.source) params.source = filterParams.source;
       if (filterParams.maxDelay) params.maxDelay = filterParams.maxDelay;
       if (filterParams.minSpeed) params.minSpeed = filterParams.minSpeed;
+      if (filterParams.maxFraudScore) params.maxFraudScore = filterParams.maxFraudScore;
       if (filterParams.speedStatus) params.speedStatus = filterParams.speedStatus;
       if (filterParams.delayStatus) params.delayStatus = filterParams.delayStatus;
       if (filterParams.protocol) params.protocol = filterParams.protocol;
+      if (filterParams.residentialType) params.residentialType = filterParams.residentialType;
+      if (filterParams.ipType) params.ipType = filterParams.ipType;
+      if (filterParams.qualityStatus) params.qualityStatus = filterParams.qualityStatus;
       if (filterParams.countries && filterParams.countries.length > 0) {
         params['countries[]'] = filterParams.countries;
       }
@@ -284,7 +331,7 @@ export default function NodeList() {
 
   // 初始化加载
   useEffect(() => {
-    fetchNodes({ page: 0, pageSize: rowsPerPage });
+    fetchNodes({ page: 0, pageSize: rowsPerPage, source: getSourceFilterFromQuery(location.search) });
     // 请求国家代码列表
     getNodeCountries()
       .then((res) => {
@@ -331,6 +378,15 @@ export default function NodeList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const nextSourceFilter = getSourceFilterFromQuery(location.search);
+    setSourceFilter((prev) => (prev === nextSourceFilter ? prev : nextSourceFilter));
+  }, [getSourceFilterFromQuery, location.search]);
+
+  useEffect(() => {
+    syncSourceFilterToQuery(sourceFilter);
+  }, [sourceFilter, syncSourceFilterToQuery]);
+
   // 监听过滤条件变化，带防抖发送请求到后端
   useEffect(() => {
     // 清除之前的定时器
@@ -346,9 +402,13 @@ export default function NodeList() {
         source: sourceFilter,
         maxDelay: maxDelay,
         minSpeed: minSpeed,
+        maxFraudScore: maxFraudScore,
         speedStatus: speedStatusFilter,
         delayStatus: delayStatusFilter,
         protocol: protocolFilter,
+        residentialType: residentialType,
+        ipType: ipType,
+        qualityStatus: qualityStatus,
         countries: countryFilter,
         tags: tagFilter,
         sortBy: sortBy,
@@ -372,9 +432,13 @@ export default function NodeList() {
     sourceFilter,
     maxDelay,
     minSpeed,
+    maxFraudScore,
     speedStatusFilter,
     delayStatusFilter,
     protocolFilter,
+    residentialType,
+    ipType,
+    qualityStatus,
     countryFilter,
     tagFilter,
     sortBy,
@@ -398,11 +462,15 @@ export default function NodeList() {
     setSourceFilter('');
     setMaxDelay('');
     setMinSpeed('');
+    setMaxFraudScore('');
     setSpeedStatusFilter('');
     setDelayStatusFilter('');
     setCountryFilter([]);
     setTagFilter([]);
     setProtocolFilter('');
+    setResidentialType('');
+    setIpType('');
+    setQualityStatus('');
     setSortBy('');
     setSortOrder('asc');
   };
@@ -413,9 +481,13 @@ export default function NodeList() {
     source: sourceFilter,
     maxDelay: maxDelay,
     minSpeed: minSpeed,
+    maxFraudScore: maxFraudScore,
     speedStatus: speedStatusFilter,
     delayStatus: delayStatusFilter,
     protocol: protocolFilter,
+    residentialType: residentialType,
+    ipType: ipType,
+    qualityStatus: qualityStatus,
     countries: countryFilter,
     tags: tagFilter,
     sortBy: sortBy,
@@ -476,10 +548,15 @@ export default function NodeList() {
     sourceFilter,
     maxDelay,
     minSpeed,
+    maxFraudScore,
     speedStatusFilter,
     delayStatusFilter,
+    protocolFilter,
     countryFilter,
     tagFilter,
+    residentialType,
+    ipType,
+    qualityStatus,
     sortBy,
     sortOrder,
     page,
@@ -863,9 +940,13 @@ export default function NodeList() {
         if (filters.source) params.source = filters.source;
         if (filters.maxDelay) params.maxDelay = filters.maxDelay;
         if (filters.minSpeed) params.minSpeed = filters.minSpeed;
+        if (filters.maxFraudScore) params.maxFraudScore = filters.maxFraudScore;
         if (filters.speedStatus) params.speedStatus = filters.speedStatus;
         if (filters.delayStatus) params.delayStatus = filters.delayStatus;
         if (filters.protocol) params.protocol = filters.protocol;
+        if (filters.residentialType) params.residentialType = filters.residentialType;
+        if (filters.ipType) params.ipType = filters.ipType;
+        if (filters.qualityStatus) params.qualityStatus = filters.qualityStatus;
         if (filters.countries && filters.countries.length > 0) {
           params['countries[]'] = filters.countries;
         }
@@ -931,7 +1012,7 @@ export default function NodeList() {
             <Button variant="contained" startIcon={<AddIcon />} onClick={handleAddNode}>
               添加节点
             </Button>
-            <Button variant="outlined" color="primary" startIcon={<DownloadIcon />} onClick={() => navigate('/subscription/airports')}>
+            <Button variant="outlined" color="primary" startIcon={<FlightIcon />} onClick={() => navigate('/subscription/airports')}>
               机场管理
             </Button>
             <Button variant="outlined" color="info" startIcon={<SettingsIcon />} onClick={handleOpenSpeedTest}>
@@ -945,9 +1026,9 @@ export default function NodeList() {
                 sx={
                   loading
                     ? {
-                      animation: 'spin 1s linear infinite',
-                      '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } }
-                    }
+                        animation: 'spin 1s linear infinite',
+                        '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } }
+                      }
                     : {}
                 }
               />
@@ -966,7 +1047,7 @@ export default function NodeList() {
             size="small"
             variant="outlined"
             color="primary"
-            startIcon={<DownloadIcon />}
+            startIcon={<FlightIcon />}
             onClick={() => navigate('/subscription/airports')}
             sx={{ whiteSpace: 'nowrap' }}
           >
@@ -990,9 +1071,9 @@ export default function NodeList() {
               sx={
                 loading
                   ? {
-                    animation: 'spin 1s linear infinite',
-                    '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } }
-                  }
+                      animation: 'spin 1s linear infinite',
+                      '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } }
+                    }
                   : {}
               }
             />
@@ -1011,10 +1092,18 @@ export default function NodeList() {
         setMaxDelay={setMaxDelay}
         minSpeed={minSpeed}
         setMinSpeed={setMinSpeed}
+        maxFraudScore={maxFraudScore}
+        setMaxFraudScore={setMaxFraudScore}
         speedStatusFilter={speedStatusFilter}
         setSpeedStatusFilter={setSpeedStatusFilter}
         delayStatusFilter={delayStatusFilter}
         setDelayStatusFilter={setDelayStatusFilter}
+        residentialType={residentialType}
+        setResidentialType={setResidentialType}
+        ipType={ipType}
+        setIpType={setIpType}
+        qualityStatus={qualityStatus}
+        setQualityStatus={setQualityStatus}
         countryFilter={countryFilter}
         setCountryFilter={setCountryFilter}
         tagFilter={tagFilter}

@@ -6,7 +6,7 @@ import (
 	"sublink/middlewares"
 	"sublink/models"
 	"sublink/services/geoip"
-	"sublink/services/sse"
+	"sublink/services/notifications"
 	"sublink/utils"
 	"time"
 
@@ -76,7 +76,6 @@ func UserLogin(c *gin.Context) {
 	password := c.PostForm("password")
 	captchaCode := c.PostForm("captchaCode")
 	captchaKey := c.PostForm("captchaKey")
-	rememberMe := c.PostForm("rememberMe") == "true"
 	ip := c.ClientIP()
 
 	// 0. 检查IP是否被封禁
@@ -132,111 +131,53 @@ func UserLogin(c *gin.Context) {
 	}
 	// 登录成功，清除失败记录
 	limiter.ClearFailures(ip)
-	// 生成token
-	token, err := GetToken(user)
-	if err != nil {
-		utils.Error("获取token失败: %v", err)
-		utils.FailWithMsg(c, "获取token失败")
-		return
-	}
-
-	// 如果勾选记住密码，生成 rememberToken (支持多设备)
-	var rememberToken string
-	if rememberMe {
-		userAgent := c.GetHeader("User-Agent")
-		rememberToken, err = models.GenerateRememberToken(user.ID, userAgent)
+	if user.TOTPEnabled {
+		challengeToken, err := issuePendingMFAChallenge(user)
 		if err != nil {
-			utils.Error("生成记住密码令牌失败: %v", err)
-			// 不影响正常登录，只是不返回 rememberToken
+			utils.Error("生成 MFA 挑战失败: %v", err)
+			utils.FailWithMsg(c, "生成登录验证失败")
+			return
 		}
-	}
-
-	// 异步发送登录通知
-	go func(username, ip string) {
-		location, err := geoip.GetLocation(ip)
-		if err != nil {
-			location = "未知位置"
-		}
-		if location == "" {
-			location = "未知位置"
-		}
-		timeStr := time.Now().Format("2006-01-02 15:04:05")
-
-		payload := sse.NotificationPayload{
-			Event:   "user_login",
-			Title:   "用户登录通知",
-			Message: fmt.Sprintf("用户 %s 已登录\nIP: %s (%s)\n时间: %s", username, ip, location, timeStr),
-			Data: map[string]interface{}{
-				"username": username,
-				"ip":       ip,
-				"location": location,
-				"time":     timeStr,
-			},
-			Time: timeStr,
-		}
-
-		// 触发 Telegram 和 Webhook
-		sse.TriggerTelegram("user_login", payload)
-		sse.TriggerWebhook("user_login", payload)
-	}(username, ip)
-
-	// 登录成功返回token
-	utils.OkDetailed(c, "登录成功", gin.H{
-		"accessToken":   token,
-		"tokenType":     "Bearer",
-		"refreshToken":  nil,
-		"expires":       nil,
-		"rememberToken": rememberToken,
-	})
-}
-
-// RememberLogin 使用记住密码令牌登录
-func RememberLogin(c *gin.Context) {
-	rememberToken := c.PostForm("rememberToken")
-	if rememberToken == "" {
-		utils.FailWithMsg(c, "无效的登录令牌")
+		utils.OkDetailed(c, "需要进行二次验证", gin.H{
+			"requiresMFA":    true,
+			"challengeToken": challengeToken,
+			"methods":        []string{"totp", "recovery_code"},
+		})
 		return
 	}
 
-	// 验证令牌并获取用户
-	user, err := models.VerifyAndGetUserByToken(rememberToken)
-	if err != nil {
-		utils.Warn("记住密码令牌验证失败: %v", err)
-		utils.FailWithMsg(c, "登录令牌已过期，请重新登录")
-		return
-	}
-
-	// 生成新的 JWT token
-	token, err := GetToken(user)
-	if err != nil {
-		utils.Error("获取token失败: %v", err)
-		utils.FailWithMsg(c, "获取token失败")
-		return
-	}
-
-	// 返回登录成功
-	utils.OkDetailed(c, "自动登录成功", gin.H{
-		"accessToken":  token,
-		"tokenType":    "Bearer",
-		"refreshToken": nil,
-		"expires":      nil,
-	})
+	respondLoginSuccess(c, user, ip)
 }
 
 // UserOut 用户退出登录
 func UserOut(c *gin.Context) {
 	// 拿到jwt中的username
 	if _, Is := c.Get("username"); Is {
-		// 如果前端传递了 rememberToken，删除它
-		rememberToken := c.Query("rememberToken")
-		if rememberToken == "" {
-			rememberToken = c.PostForm("rememberToken")
-		}
-		if rememberToken != "" {
-			if err := models.DeleteRememberToken(rememberToken); err != nil {
-				utils.Error("删除记住密码令牌失败: %v", err)
-			}
-		}
 		utils.OkWithMsg(c, "退出成功")
 	}
+}
+
+func notifyUserLogin(username, ip string) {
+	location, err := geoip.GetLocation(ip)
+	if err != nil {
+		location = "未知位置"
+	}
+	if location == "" {
+		location = "未知位置"
+	}
+	timeStr := time.Now().Format("2006-01-02 15:04:05")
+
+	payload := notifications.Payload{
+		Title:   "用户登录通知",
+		Message: fmt.Sprintf("用户 %s 已登录\nIP: %s (%s)\n时间: %s", username, ip, location, timeStr),
+		Data: map[string]interface{}{
+			"username": username,
+			"ip":       ip,
+			"location": location,
+			"time":     timeStr,
+		},
+		Time: timeStr,
+	}
+
+	notifications.Publish("security.user_login", payload)
 }
