@@ -222,22 +222,28 @@ func buildSyntheticFallbackResponse(clientType, message string) preparedClientRe
 }
 
 func buildSyntheticErrorNodes(message string) []models.Node {
-	httpLink := protocol.EncodeHTTPURL(protocol.HTTP{
-		Name:   message,
-		Server: "placeholder.invalid",
-		Port:   80,
-		TLS:    false,
-	})
-
+	link := buildSyntheticErrorLink(message)
 	return []models.Node{{
 		ID:       -1,
 		Name:     message,
 		LinkName: message,
-		Link:     httpLink,
-		Protocol: "http",
+		Link:     link,
+		Protocol: "ss",
 		Source:   "manual",
 		SourceID: 0,
 	}}
+}
+
+func buildSyntheticErrorLink(message string) string {
+	return protocol.EncodeSSURL(protocol.Ss{
+		Name:   message,
+		Server: "placeholder.invalid",
+		Port:   80,
+		Param: protocol.Param{
+			Cipher:   "aes-128-gcm",
+			Password: "placeholder",
+		},
+	})
 }
 
 func buildSyntheticFallbackConfig() (string, error) {
