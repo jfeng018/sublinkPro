@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 // material-ui
-import { useTheme } from '@mui/material/styles';
+import { alpha, useTheme } from '@mui/material/styles';
 import Avatar from '@mui/material/Avatar';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
@@ -29,7 +29,10 @@ import Box from '@mui/material/Box';
 import MainCard from 'ui-component/cards/MainCard';
 import Transitions from 'ui-component/extended/Transitions';
 import useConfig from 'hooks/useConfig';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
 import { useAuth } from 'contexts/AuthContext';
+import { getHeaderPopoverTokens, getHeaderTriggerTokens } from '../headerPopoverTokens';
+import { withAlpha } from 'utils/colorUtils';
 
 // assets
 import { IconLogout, IconUser, IconKey, IconDatabaseExport, IconSettings, IconDatabaseOff, IconWorld } from '@tabler/icons-react';
@@ -59,6 +62,42 @@ const getGreeting = () => {
   }
 };
 
+const getProfileMenuTokens = (theme, isDark) => {
+  const {
+    palette,
+    primaryText,
+    emphasizedText,
+    secondaryText,
+    mutedText,
+    tertiaryText,
+    popoverSurface,
+    popoverSurfaceAccent,
+    popoverBorder,
+    headerSurface,
+    headerDivider,
+    nestedSurface,
+    nestedBorder,
+    listItemHover
+  } = getHeaderPopoverTokens(theme, isDark);
+
+  return {
+    palette,
+    primaryText,
+    emphasizedText,
+    secondaryText,
+    mutedText,
+    tertiaryText,
+    popoverSurface,
+    popoverSurfaceAccent,
+    popoverBorder,
+    headerSurface,
+    headerDivider,
+    nestedProfileSurface: nestedSurface,
+    nestedProfileBorder: nestedBorder,
+    menuHoverBg: listItemHover
+  };
+};
+
 // ==============================|| PROFILE MENU ||============================== //
 
 export default function ProfileSection() {
@@ -77,6 +116,34 @@ export default function ProfileSection() {
   const [geoipDialogOpen, setGeoipDialogOpen] = useState(false);
   const anchorRef = useRef(null);
   const greeting = getGreeting();
+  const { isDark } = useResolvedColorScheme();
+  const {
+    palette,
+    popoverSurface,
+    popoverSurfaceAccent,
+    popoverBorder,
+    headerSurface,
+    headerDivider,
+    nestedProfileSurface,
+    nestedProfileBorder,
+    primaryText,
+    emphasizedText,
+    mutedText,
+    tertiaryText,
+    menuHoverBg
+  } = getProfileMenuTokens(theme, isDark);
+  const profileAccent = isDark ? theme.palette.info.main : theme.palette.primary.main;
+  const { triggerColor, triggerSurface, triggerBorder, activeColor, activeSurface, activeBorder } = getHeaderTriggerTokens(
+    theme,
+    isDark,
+    profileAccent,
+    {
+      lightSurfaceAlpha: 0.12,
+      lightHoverAlpha: 0.2,
+      triggerColor: isDark ? primaryText : profileAccent,
+      activeColor: isDark ? emphasizedText : profileAccent
+    }
+  );
 
   // 确认对话框
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -242,8 +309,15 @@ export default function ProfileSection() {
           height: '48px',
           alignItems: 'center',
           borderRadius: '27px',
+          color: triggerColor,
+          background: triggerSurface,
+          border: '1px solid',
+          borderColor: triggerBorder,
           transition: 'all 0.2s',
-          '&:hover': {
+          '&:hover, &[aria-controls="menu-list-grow"]': {
+            color: activeColor,
+            background: activeSurface,
+            borderColor: activeBorder,
             boxShadow: theme.shadows[3]
           }
         }}
@@ -251,7 +325,15 @@ export default function ProfileSection() {
           <Avatar
             src={user?.avatar}
             alt={!user?.avatar && (user?.username?.[0] || user?.nickname?.[0] || 'U').toUpperCase()}
-            sx={{ typography: 'mediumAvatar', margin: '8px 0 8px 8px !important', cursor: 'pointer' }}
+            sx={{
+              typography: 'mediumAvatar',
+              margin: '8px 0 8px 8px !important',
+              cursor: 'pointer',
+              bgcolor: isDark ? withAlpha(palette.background.default, 0.72) : withAlpha(theme.palette.common.white, 0.72),
+              color: isDark ? emphasizedText : profileAccent,
+              border: '1px solid',
+              borderColor: withAlpha(profileAccent, isDark ? 0.24 : 0.18)
+            }}
             ref={anchorRef}
             aria-controls={open ? 'menu-list-grow' : undefined}
             aria-haspopup="true"
@@ -287,22 +369,44 @@ export default function ProfileSection() {
         {({ TransitionProps }) => (
           <ClickAwayListener onClickAway={handleClose}>
             <Transitions in={open} {...TransitionProps}>
-              <Paper>
+              <Paper sx={{ bgcolor: 'transparent' }}>
                 {open && (
-                  <MainCard border={false} elevation={16} content={false} boxShadow shadow={theme.shadows[16]}>
-                    <Box sx={{ p: 2, pb: 0 }}>
+                  <MainCard
+                    border={false}
+                    elevation={0}
+                    content={false}
+                    boxShadow
+                    shadow={isDark ? 'none' : theme.shadows[12]}
+                    sx={{
+                      bgcolor: popoverSurface,
+                      backgroundImage: popoverSurfaceAccent,
+                      border: '1px solid',
+                      borderColor: popoverBorder,
+                      boxShadow: isDark ? `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.04)}` : undefined
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        p: 2,
+                        pb: 0,
+                        bgcolor: headerSurface,
+                        borderBottom: isDark ? `1px solid ${headerDivider}` : 'none'
+                      }}
+                    >
                       <Stack>
                         <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5 }}>
-                          <Typography variant="h4">{greeting}，</Typography>
-                          <Typography component="span" variant="h4" sx={{ fontWeight: 600 }}>
+                          <Typography variant="h4" sx={{ color: primaryText }}>
+                            {greeting}，
+                          </Typography>
+                          <Typography component="span" variant="h4" sx={{ fontWeight: 600, color: emphasizedText }}>
                             {user?.nickname || user?.username || '用户'}
                           </Typography>
                         </Stack>
-                        <Typography variant="subtitle2" color="textSecondary">
+                        <Typography variant="subtitle2" sx={{ color: mutedText }}>
                           {user?.role === 'admin' ? '管理员' : '普通用户'}
                         </Typography>
                       </Stack>
-                      <Divider sx={{ my: 2 }} />
+                      <Divider sx={{ my: 2, borderColor: withAlpha(palette.divider, isDark ? 0.7 : 1) }} />
                     </Box>
                     <Box
                       sx={{
@@ -314,23 +418,49 @@ export default function ProfileSection() {
                         '&::-webkit-scrollbar': { width: 5 }
                       }}
                     >
-                      <Card sx={{ bgcolor: 'primary.light', mb: 2 }}>
-                        <CardContent>
+                      <Card
+                        sx={{
+                          mb: 2,
+                          bgcolor: nestedProfileSurface,
+                          border: '1px solid',
+                          borderColor: nestedProfileBorder,
+                          boxShadow: isDark ? `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.04)}` : 'none'
+                        }}
+                      >
+                        <CardContent sx={{ '&:last-child': { pb: 2 } }}>
                           <Stack direction="row" sx={{ alignItems: 'center', gap: 2 }}>
-                            <Avatar src={user?.avatar} alt={(user?.username?.[0] || 'U').toUpperCase()} sx={{ width: 56, height: 56 }}>
+                            <Avatar
+                              src={user?.avatar}
+                              alt={(user?.username?.[0] || 'U').toUpperCase()}
+                              sx={{
+                                width: 56,
+                                height: 56,
+                                bgcolor: alpha(theme.palette.primary.main, isDark ? 0.18 : 0.1),
+                                color: 'primary.main',
+                                border: '1px solid',
+                                borderColor: alpha(theme.palette.primary.main, isDark ? 0.3 : 0.18)
+                              }}
+                            >
                               {!user?.avatar && (user?.username?.[0] || user?.nickname?.[0] || 'U').toUpperCase()}
                             </Avatar>
-                            <Box>
-                              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography
+                                variant="subtitle1"
+                                sx={{
+                                  fontWeight: 700,
+                                  color: emphasizedText
+                                }}
+                              >
                                 {user?.username || '未知用户'}
                               </Typography>
-                              <Typography variant="caption" color="textSecondary">
+                              <Typography variant="caption" color="text.secondary" sx={{ color: mutedText }}>
                                 {user?.nickname || user?.username || '用户'}
                               </Typography>
                             </Box>
                           </Stack>
                         </CardContent>
                       </Card>
+
                       <List
                         component="nav"
                         sx={{
@@ -338,7 +468,17 @@ export default function ProfileSection() {
                           maxWidth: 350,
                           minWidth: 300,
                           borderRadius: `${borderRadius}px`,
-                          '& .MuiListItemButton-root': { mt: 0.5 }
+                          '& .MuiListItemButton-root': {
+                            mt: 0.5,
+                            color: primaryText,
+                            '& .MuiListItemIcon-root': {
+                              minWidth: 36,
+                              color: tertiaryText
+                            },
+                            '&:hover': {
+                              bgcolor: menuHoverBg
+                            }
+                          }
                         }}
                       >
                         <ListItemButton sx={{ borderRadius: `${borderRadius}px` }} onClick={handleApiKeys}>
@@ -376,7 +516,7 @@ export default function ProfileSection() {
                             primaryTypographyProps={{ component: 'div' }}
                             primary={<Typography variant="body2">清除IP缓存</Typography>}
                             secondary={
-                              <Typography variant="caption" color="textSecondary">
+                              <Typography variant="caption" sx={{ color: mutedText }}>
                                 当前缓存 {ipCacheCount} 条
                               </Typography>
                             }
@@ -403,7 +543,7 @@ export default function ProfileSection() {
                             borderRadius: `${borderRadius}px`,
                             color: 'error.main',
                             '&:hover': {
-                              bgcolor: 'error.light'
+                              bgcolor: withAlpha(theme.palette.error.main, isDark ? 0.16 : 0.12)
                             }
                           }}
                           onClick={handleLogout}
@@ -431,7 +571,7 @@ export default function ProfileSection() {
       </Popper>
 
       {/* 备份加载遮罩 */}
-      <Backdrop sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 1 }} open={backupLoading}>
+      <Backdrop sx={{ color: theme.palette.common.white, zIndex: (muiTheme) => muiTheme.zIndex.drawer + 1 }} open={backupLoading}>
         <Stack alignItems="center" spacing={2}>
           <CircularProgress color="inherit" />
           <Typography>正在生成备份文件，请稍候...</Typography>

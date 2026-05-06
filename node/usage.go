@@ -61,18 +61,14 @@ func FetchAirportUsageInfo(airport *models.Airport) (*UsageInfo, error) {
 							return nil, fmt.Errorf("split host port error: %v", splitErr)
 						}
 
-						portInt, atoiErr := strconv.Atoi(portStr)
-						if atoiErr != nil {
-							return nil, fmt.Errorf("invalid port: %v", atoiErr)
-						}
-
-						if portInt < 0 || portInt > 65535 {
-							return nil, fmt.Errorf("port out of range: %d", portInt)
+						portUint, parseErr := strconv.ParseUint(portStr, 10, 16)
+						if parseErr != nil {
+							return nil, fmt.Errorf("invalid port: %v", parseErr)
 						}
 
 						metadata := &constant.Metadata{
 							Host:    host,
-							DstPort: uint16(portInt),
+							DstPort: uint16(portUint),
 							Type:    constant.HTTP,
 						}
 
@@ -96,7 +92,7 @@ func FetchAirportUsageInfo(airport *models.Airport) (*UsageInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %v", err)
 	}
-	headReq.Header.Set("User-Agent", userAgent)
+	applyRequestHeaders(headReq, userAgent, airport.RequestHeaders)
 
 	resp, err = client.Do(headReq)
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -114,7 +110,7 @@ func FetchAirportUsageInfo(airport *models.Airport) (*UsageInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("创建请求失败: %v", err)
 		}
-		getReq.Header.Set("User-Agent", userAgent)
+		applyRequestHeaders(getReq, userAgent, airport.RequestHeaders)
 
 		resp, err = client.Do(getReq)
 		if err != nil {

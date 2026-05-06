@@ -28,20 +28,45 @@ import EditIcon from '@mui/icons-material/Edit';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import SpeedIcon from '@mui/icons-material/Speed';
+import LockOpenIcon from '@mui/icons-material/LockOpen';
 
 // api
-import { getNodeCheckProfiles, updateNodeCheckProfile, deleteNodeCheckProfile, runNodeCheckWithProfile } from 'api/nodeCheck';
+import {
+  getNodeCheckMeta,
+  getNodeCheckProfiles,
+  updateNodeCheckProfile,
+  deleteNodeCheckProfile,
+  runNodeCheckWithProfile
+} from 'api/nodeCheck';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
 
 // local components
 import NodeCheckProfileFormDialog from './NodeCheckProfileFormDialog';
+import { withAlpha } from 'utils/colorUtils';
+import { getNodeCheckStrategyChipSx, getNodeCheckStrategyThemeTokens } from '../nodeCheckTheme';
+
+import { buildNodeCheckProfilePayload, formatUnlockProvidersSummary, setUnlockMeta } from '../utils';
 
 /**
  * 节点检测策略管理抽屉
  */
 export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, tagOptions, onMessage }) {
   const theme = useTheme();
-  const isDark = theme.palette.mode === 'dark';
+  const { isDark } = useResolvedColorScheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const themeTokens = getNodeCheckStrategyThemeTokens(theme, isDark);
+  const {
+    palette,
+    dialogSurface,
+    dialogSurfaceGradient,
+    headerSurface,
+    emptyStateSurface,
+    panelBorder,
+    listRowHoverBackground,
+    closeButtonHoverSurface,
+    successActionHoverSurface,
+    errorActionHoverSurface
+  } = themeTokens;
 
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -52,8 +77,9 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
   const loadProfiles = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await getNodeCheckProfiles();
-      setProfiles(response.data || []);
+      const [profilesRes, metaRes] = await Promise.all([getNodeCheckProfiles(), getNodeCheckMeta()]);
+      setProfiles(profilesRes.data || []);
+      setUnlockMeta(metaRes.data || {});
     } catch (error) {
       console.error('加载策略列表失败:', error);
       onMessage?.('加载策略列表失败', 'error');
@@ -71,31 +97,7 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
   // 切换启用状态
   const handleToggleEnabled = async (profile) => {
     try {
-      // 将 groups 和 tags 字符串转换为数组格式（后端 API 期望数组类型）
-      const groups = profile.groups ? profile.groups.split(',').filter(Boolean) : [];
-      const tags = profile.tags ? profile.tags.split(',').filter(Boolean) : [];
-
-      await updateNodeCheckProfile(profile.id, {
-        name: profile.name,
-        enabled: !profile.enabled,
-        cronExpr: profile.cronExpr,
-        mode: profile.mode,
-        testUrl: profile.testUrl,
-        latencyUrl: profile.latencyUrl,
-        timeout: profile.timeout,
-        groups,
-        tags,
-        latencyConcurrency: profile.latencyConcurrency,
-        speedConcurrency: profile.speedConcurrency,
-        detectCountry: profile.detectCountry,
-        landingIpUrl: profile.landingIpUrl,
-        includeHandshake: profile.includeHandshake,
-        speedRecordMode: profile.speedRecordMode,
-        peakSampleInterval: profile.peakSampleInterval,
-        trafficByGroup: profile.trafficByGroup,
-        trafficBySource: profile.trafficBySource,
-        trafficByNode: profile.trafficByNode
-      });
+      await updateNodeCheckProfile(profile.id, buildNodeCheckProfilePayload(profile, { enabled: !profile.enabled }));
       loadProfiles();
       onMessage?.(profile.enabled ? '已禁用定时检测' : '已启用定时检测');
     } catch (error) {
@@ -181,7 +183,12 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
         PaperProps={{
           sx: {
             width: isMobile ? '100%' : 420,
-            backgroundColor: isDark ? 'rgba(18,18,18,0.98)' : 'background.paper'
+            backgroundColor: dialogSurface,
+            backgroundImage: dialogSurfaceGradient,
+            borderLeft: `1px solid ${panelBorder}`,
+            boxShadow: isDark ? `inset 0 1px 0 ${withAlpha(palette.common.white, 0.05)}` : theme.shadows[8],
+            display: 'flex',
+            flexDirection: 'column'
           }
         }}
       >
@@ -192,7 +199,8 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
             alignItems: 'center',
             justifyContent: 'space-between',
             p: 2,
-            borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'}`
+            borderBottom: `1px solid ${panelBorder}`,
+            backgroundColor: headerSurface
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -203,7 +211,15 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
             <Button size="small" variant="contained" startIcon={<AddIcon />} onClick={handleAdd}>
               新建
             </Button>
-            <IconButton onClick={onClose} size="small">
+            <IconButton
+              onClick={onClose}
+              size="small"
+              sx={{
+                '&:hover': {
+                  backgroundColor: closeButtonHoverSurface
+                }
+              }}
+            >
               <CloseIcon />
             </IconButton>
           </Stack>
@@ -216,7 +232,19 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
               <CircularProgress size={32} />
             </Box>
           ) : profiles.length === 0 ? (
-            <Box sx={{ textAlign: 'center', py: 6 }}>
+            <Box
+              sx={{
+                textAlign: 'center',
+                py: 6,
+                px: 3,
+                m: 2,
+                borderRadius: 2,
+                border: '1px solid',
+                borderColor: panelBorder,
+                backgroundColor: emptyStateSurface,
+                boxShadow: isDark ? `inset 0 1px 0 ${withAlpha(palette.common.white, 0.04)}` : 'none'
+              }}
+            >
               <SpeedIcon sx={{ fontSize: 48, opacity: 0.3, mb: 2 }} />
               <Typography color="text.secondary" gutterBottom>
                 暂无检测策略
@@ -232,27 +260,53 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
                   <ListItem
                     sx={{
                       py: 2,
+                      transition: 'background 0.2s ease',
                       '&:hover': {
-                        backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)'
+                        background: listRowHoverBackground
                       }
                     }}
                   >
                     <ListItemText
+                      sx={{ minWidth: 0, pr: 10.5 }}
+                      disableTypography
                       primary={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                          <Typography variant="subtitle1" fontWeight={600}>
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            columnGap: 0.75,
+                            rowGap: 0.75,
+                            flexWrap: 'wrap',
+                            mb: 0.5,
+                            minWidth: 0
+                          }}
+                        >
+                          <Typography
+                            variant="subtitle1"
+                            fontWeight={600}
+                            sx={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          >
                             {profile.name}
                           </Typography>
                           <Chip
                             label={profile.mode === 'mihomo' ? '延迟+速度' : '仅延迟'}
                             size="small"
-                            sx={{
-                              height: 20,
-                              fontSize: '0.7rem',
-                              backgroundColor: profile.mode === 'mihomo' ? 'rgba(76, 175, 80, 0.15)' : 'rgba(33, 150, 243, 0.15)',
-                              color: profile.mode === 'mihomo' ? 'success.main' : 'primary.main'
-                            }}
+                            sx={getNodeCheckStrategyChipSx(themeTokens, profile.mode === 'mihomo' ? 'success' : 'info')}
                           />
+                          {profile.detectCountry && (
+                            <Chip label="国家" size="small" sx={getNodeCheckStrategyChipSx(themeTokens, 'neutral')} />
+                          )}
+                          {profile.detectQuality && (
+                            <Chip label="质量" size="small" sx={getNodeCheckStrategyChipSx(themeTokens, 'warning')} />
+                          )}
+                          {profile.detectUnlock && (
+                            <Chip
+                              icon={<LockOpenIcon sx={{ fontSize: '12px !important' }} />}
+                              label={`解锁${profile.unlockProviders?.length ? ` · ${formatUnlockProvidersSummary(profile.unlockProviders, 1)}` : ''}`}
+                              size="small"
+                              sx={getNodeCheckStrategyChipSx(themeTokens, 'info')}
+                            />
+                          )}
                         </Box>
                       }
                       secondary={
@@ -268,7 +322,11 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
                                 icon={<ScheduleIcon sx={{ fontSize: '14px !important' }} />}
                                 label={`下次: ${formatNextRunTime(profile.nextRunTime)}`}
                                 size="small"
-                                sx={{ height: 20, fontSize: '0.65rem' }}
+                                sx={{
+                                  ...getNodeCheckStrategyChipSx(themeTokens, 'neutral'),
+                                  height: 20,
+                                  fontSize: '0.65rem'
+                                }}
                               />
                             )}
                           </Box>
@@ -282,6 +340,11 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
                               范围: {profile.groups || '全部分组'} {profile.tags ? `| 标签: ${profile.tags}` : ''}
                             </Typography>
                           )}
+                          {profile.detectUnlock && (
+                            <Typography variant="caption" color="text.secondary">
+                              解锁 Provider: {formatUnlockProvidersSummary(profile.unlockProviders, 2)}
+                            </Typography>
+                          )}
                         </Stack>
                       }
                     />
@@ -293,14 +356,21 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
                             onClick={() => handleRun(profile)}
                             sx={{
                               color: 'success.main',
-                              '&:hover': { backgroundColor: 'rgba(76, 175, 80, 0.1)' }
+                              '&:hover': { backgroundColor: successActionHoverSurface }
                             }}
                           >
                             <PlayArrowIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="编辑">
-                          <IconButton size="small" onClick={() => handleEdit(profile)}>
+                          <IconButton
+                            size="small"
+                            onClick={() => handleEdit(profile)}
+                            sx={{
+                              color: 'text.secondary',
+                              '&:hover': { backgroundColor: closeButtonHoverSurface }
+                            }}
+                          >
                             <EditIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
@@ -310,7 +380,7 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
                             onClick={() => handleDelete(profile)}
                             sx={{
                               color: 'error.main',
-                              '&:hover': { backgroundColor: 'rgba(244, 67, 54, 0.1)' }
+                              '&:hover': { backgroundColor: errorActionHoverSurface }
                             }}
                           >
                             <DeleteIcon fontSize="small" />
@@ -319,7 +389,7 @@ export default function NodeCheckProfilesDrawer({ open, onClose, groupOptions, t
                       </Stack>
                     </ListItemSecondaryAction>
                   </ListItem>
-                  {index < profiles.length - 1 && <Divider />}
+                  {index < profiles.length - 1 && <Divider sx={{ borderColor: panelBorder }} />}
                 </Box>
               ))}
             </List>

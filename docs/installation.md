@@ -9,6 +9,9 @@
 > [!TIP]
 > **推荐使用 Docker Compose 部署**，便于管理配置、升级和维护。
 
+> [!IMPORTANT]
+> `db/`、`template/`、`logs/` 属于运行时持久化目录，请在升级和迁移时保留。
+
 创建 `docker-compose.yml` 文件：
 
 ```yaml
@@ -230,6 +233,8 @@ https://zeabur.com/projects
    ```env
    # 基础配置
    SUBLINK_PORT=8000
+   # 可选：切换到 MySQL/PostgreSQL 时设置
+   # SUBLINK_DSN=mysql://user:pass@tcp(mysql:3306)/sublink?charset=utf8mb4&parseTime=True&loc=Local
    SUBLINK_LOG_LEVEL=error
    SUBLINK_EXPIRE_DAYS=14
 
@@ -260,6 +265,4 @@ https://zeabur.com/projects
      * 点击 "Add Domain" 添加你的域名
      * 按照提示配置 DNS CNAME 记录指向 Zeabur 提供的目标地址
    - 设置完域名后即可通过域名访问,使用默认账号 `admin` / `123456` 登录
-
-
 

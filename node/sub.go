@@ -15,7 +15,7 @@ import (
 	"sublink/models"
 	"sublink/node/protocol"
 	"sublink/services/mihomo"
-	"sublink/services/sse"
+	"sublink/services/notifications"
 	"sublink/utils"
 	"time"
 
@@ -139,14 +139,29 @@ func isTLSError(err error) bool {
 // proxyLink: 代理链接 (可选)
 // userAgent: 请求的 User-Agent (可选，默认 Clash)
 func LoadClashConfigFromURL(id int, urlStr string, subName string, downloadWithProxy bool, proxyLink string, userAgent string) (*UsageInfo, error) {
-	return LoadClashConfigFromURLWithReporter(id, urlStr, subName, downloadWithProxy, proxyLink, userAgent, nil, false, true)
+	return LoadClashConfigFromURLWithReporter(id, urlStr, subName, downloadWithProxy, proxyLink, userAgent, nil, nil, false, true)
+}
+
+func applyRequestHeaders(req *http.Request, userAgent string, requestHeaders models.AirportRequestHeaders) {
+	resolvedUserAgent := strings.TrimSpace(userAgent)
+	if resolvedUserAgent == "" {
+		resolvedUserAgent = "clash.meta"
+	}
+	req.Header.Set("User-Agent", resolvedUserAgent)
+
+	for _, header := range requestHeaders {
+		if header.Key == "" || strings.EqualFold(header.Key, "User-Agent") {
+			continue
+		}
+		req.Header.Add(header.Key, header.Value)
+	}
 }
 
 // LoadClashConfigFromURLWithReporter 从指定 URL 加载 Clash 配置（带任务报告器）
 // reporter: 任务进度报告器，用于TaskManager集成
 // fetchUsageInfo: 是否获取用量信息
 // skipTLSVerify: 是否跳过TLS证书验证
-func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, downloadWithProxy bool, proxyLink string, userAgent string, reporter TaskReporter, fetchUsageInfo bool, skipTLSVerify bool) (*UsageInfo, error) {
+func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, downloadWithProxy bool, proxyLink string, userAgent string, requestHeaders models.AirportRequestHeaders, reporter TaskReporter, fetchUsageInfo bool, skipTLSVerify bool) (*UsageInfo, error) {
 	// 创建 HTTP 客户端，配置 TLS
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -187,20 +202,15 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 							return nil, fmt.Errorf("split host port error: %v", splitErr)
 						}
 
-						portInt, atoiErr := strconv.Atoi(portStr)
-						if atoiErr != nil {
-							return nil, fmt.Errorf("invalid port: %v", atoiErr)
-						}
-
-						// 验证端口范围
-						if portInt < 0 || portInt > 65535 {
-							return nil, fmt.Errorf("port out of range: %d", portInt)
+						portUint, parseErr := strconv.ParseUint(portStr, 10, 16)
+						if parseErr != nil {
+							return nil, fmt.Errorf("invalid port: %v", parseErr)
 						}
 
 						// 创建 mihomo metadata
 						metadata := &constant.Metadata{
 							Host:    host,
-							DstPort: uint16(portInt),
+							DstPort: uint16(portUint),
 							Type:    constant.HTTP,
 						}
 
@@ -222,10 +232,7 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 		return nil, err
 	}
 
-	// 设置 User-Agent
-	if userAgent != "" {
-		req.Header.Set("User-Agent", userAgent)
-	}
+	applyRequestHeaders(req, userAgent, requestHeaders)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -244,14 +251,13 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 			message = fmt.Sprintf("❌订阅【%s】请求失败: %v", subName, err)
 		}
 		// 发送请求失败通知
-		sse.GetSSEBroker().BroadcastEvent("sub_update", sse.NotificationPayload{
-			Event:   "sub_update",
+		notifications.Publish("subscription.sync_failed", notifications.Payload{
 			Title:   title,
 			Message: message,
 			Data: map[string]interface{}{
 				"id":       id,
 				"name":     subName,
-				"status":   "failed",
+				"status":   "error",
 				"error":    err.Error(),
 				"tlsError": isTLSError(err),
 			},
@@ -285,14 +291,13 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 	if err != nil {
 		utils.Error("URL %s，读取Clash配置失败:  %v", urlStr, err)
 		// 发送读取失败通知
-		sse.GetSSEBroker().BroadcastEvent("sub_update", sse.NotificationPayload{
-			Event:   "sub_update",
+		notifications.Publish("subscription.sync_failed", notifications.Payload{
 			Title:   "订阅更新失败",
 			Message: fmt.Sprintf("❌订阅【%s】读取响应失败: %v", subName, err),
 			Data: map[string]interface{}{
 				"id":     id,
 				"name":   subName,
-				"status": "failed",
+				"status": "error",
 				"error":  err.Error(),
 			},
 		})
@@ -345,14 +350,13 @@ func LoadClashConfigFromURLWithReporter(id int, urlStr string, subName string, d
 	if len(config.Proxies) == 0 {
 		utils.Error("URL %s，解析失败或未找到节点 (YAML error: %v)", urlStr, errYaml)
 		// 发送解析失败通知
-		sse.GetSSEBroker().BroadcastEvent("sub_update", sse.NotificationPayload{
-			Event:   "sub_update",
+		notifications.Publish("subscription.sync_failed", notifications.Payload{
 			Title:   "订阅更新失败",
 			Message: fmt.Sprintf("❌订阅【%s】解析失败或未找到节点", subName),
 			Data: map[string]interface{}{
 				"id":     id,
 				"name":   subName,
-				"status": "failed",
+				"status": "error",
 				"error":  "解析失败或未找到节点",
 			},
 		})
@@ -771,8 +775,7 @@ func scheduleClashToNodeLinks(id int, proxys []protocol.Proxy, subName string, r
 		nData["usage"] = usageData
 	}
 
-	sse.GetSSEBroker().BroadcastEvent("sub_update", sse.NotificationPayload{
-		Event:   "sub_update",
+	notifications.Publish("subscription.sync_succeeded", notifications.Payload{
 		Title:   "订阅更新完成",
 		Message: fmt.Sprintf("✅订阅【%s】节点同步完成，耗时 %s，总节点【%d】个，成功处理【%d】个，新增节点【%d】个，更新节点【%d】个，已存在节点【%d】个，删除失效【%d】个%s", subName, durationStr, len(proxys), addSuccessCount+skipCount, addSuccessCount, actualUpdateCount, skipCount, deleteCount, usageText),
 		Data:    nData,
@@ -960,58 +963,11 @@ func generateProxyDeduplicationKey(proxy protocol.Proxy, protoType string, field
 func GenerateProxyLink(proxy protocol.Proxy) string {
 	proxy.Name = strings.TrimSpace(proxy.Name)
 	proxy.Server = utils.WrapIPv6Host(proxy.Server)
-
-	switch strings.ToLower(proxy.Type) {
-	case "ss":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeSSURL(protocol.ConvertProxyToSs(proxy))
-
-	case "ssr":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeSSRURL(protocol.ConvertProxyToSsr(proxy))
-
-	case "trojan":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeTrojanURL(protocol.ConvertProxyToTrojan(proxy))
-
-	case "vmess":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeVmessURL(protocol.ConvertProxyToVmess(proxy))
-
-	case "vless":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeVLESSURL(protocol.ConvertProxyToVless(proxy))
-
-	case "hysteria":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeHYURL(protocol.ConvertProxyToHy(proxy))
-
-	case "hysteria2":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeHY2URL(protocol.ConvertProxyToHy2(proxy))
-
-	case "tuic":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeTuicURL(protocol.ConvertProxyToTuic(proxy))
-
-	case "anytls":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeAnyTLSURL(protocol.ConvertProxyToAnyTLS(proxy))
-
-	case "socks5":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeSocks5URL(protocol.ConvertProxyToSocks5(proxy))
-
-	case "http":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeHTTPURL(protocol.ConvertProxyToHTTP(proxy))
-	case "https":
-		// 使用协议层函数统一生成链接
-		return protocol.EncodeHTTPURL(protocol.ConvertProxyToHTTP(proxy))
-
-	default:
+	link, err := protocol.EncodeProxyLink(proxy)
+	if err != nil {
 		return ""
 	}
+	return link
 }
 
 // applyAirportNodeUniquify 应用机场节点名称唯一化
@@ -1040,32 +996,12 @@ func applyAirportNodeUniquify(airport *models.Airport, proxys []protocol.Proxy) 
 
 // parseProtoFromLink 根据协议类型解析链接获取结构体
 func parseProtoFromLink(link string, protoType string) (interface{}, error) {
-	switch protoType {
-	case "vmess":
-		return protocol.DecodeVMESSURL(link)
-	case "vless":
-		return protocol.DecodeVLESSURL(link)
-	case "trojan":
-		return protocol.DecodeTrojanURL(link)
-	case "ss":
-		return protocol.DecodeSSURL(link)
-	case "ssr":
-		return protocol.DecodeSSRURL(link)
-	case "hysteria":
-		return protocol.DecodeHYURL(link)
-	case "hysteria2":
-		return protocol.DecodeHY2URL(link)
-	case "tuic":
-		return protocol.DecodeTuicURL(link)
-	case "anytls":
-		return protocol.DecodeAnyTLSURL(link)
-	case "socks5":
-		return protocol.DecodeSocks5URL(link)
-	case "http":
-		return protocol.DecodeHTTPURL(link)
-	case "https":
-		return protocol.DecodeHTTPURL(link)
-	default:
+	protoObj, detectedProto, err := protocol.DecodeProtocolObject(link)
+	if err != nil {
+		return nil, err
+	}
+	if detectedProto != protoType {
 		return nil, fmt.Errorf("unsupported protocol: %s", protoType)
 	}
+	return protoObj, nil
 }

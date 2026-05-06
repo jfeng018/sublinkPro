@@ -1,6 +1,6 @@
 import PropTypes from 'prop-types';
 
-// material-ui
+import { useTheme } from '@mui/material/styles';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -10,13 +10,16 @@ import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import Divider from '@mui/material/Divider';
+import IconButton from '@mui/material/IconButton';
 import Stack from '@mui/material/Stack';
 import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
 import Autocomplete from '@mui/material/Autocomplete';
 import Typography from '@mui/material/Typography';
 
-// project imports
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
+
 import SearchableNodeSelect from 'components/SearchableNodeSelect';
 import CronExpressionGenerator from 'components/CronExpressionGenerator';
 import LogoPicker from 'components/LogoPicker';
@@ -24,46 +27,35 @@ import NodeNameFilter from 'components/NodeNameFilter';
 import NodeNamePreprocessor from 'components/NodeNamePreprocessor';
 import NodeProtocolFilter from 'components/NodeProtocolFilter';
 import NodeNameUniquifyConfig from 'components/NodeNameUniquifyConfig';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
+import { getReadableTextTokens, getSurfaceTokens } from 'themes/surfaceTokens';
+import { withAlpha } from 'utils/colorUtils';
 import AirportDeduplicationConfig from './AirportDeduplicationConfig';
+import AirportDialogSection from './AirportDialogSection';
 
-// constants
 import { USER_AGENT_OPTIONS } from '../utils';
 
-/**
- * 分组标题组件
- */
-function SectionTitle({ children }) {
-  return (
-    <Typography
-      variant="subtitle2"
-      color="primary"
-      sx={{
-        fontWeight: 600,
-        mb: 1.5,
-        display: 'flex',
-        alignItems: 'center',
-        '&::before': {
-          content: '""',
-          width: 3,
-          height: 16,
-          bgcolor: 'primary.main',
-          borderRadius: 1,
-          mr: 1
-        }
-      }}
-    >
-      {children}
-    </Typography>
-  );
-}
+const createEmptyRequestHeader = () => ({ key: '', value: '' });
 
-SectionTitle.propTypes = {
-  children: PropTypes.node.isRequired
+const getRequestHeaderRowError = (requestHeader) => {
+  const key = `${requestHeader?.key ?? ''}`.trim();
+  const value = `${requestHeader?.value ?? ''}`.trim();
+
+  if (!key && !value) {
+    return '';
+  }
+
+  if (!key && value) {
+    return '请输入请求头键名';
+  }
+
+  if (key.toLowerCase() === 'user-agent') {
+    return 'User-Agent 请使用上方专用字段设置';
+  }
+
+  return '';
 };
 
-/**
- * 添加/编辑机场表单对话框
- */
 export default function AirportFormDialog({
   open,
   isEdit,
@@ -77,6 +69,92 @@ export default function AirportFormDialog({
   onSubmit,
   onFetchProxyNodes
 }) {
+  const theme = useTheme();
+  const { isDark } = useResolvedColorScheme();
+  const { palette, dialogSurface, dialogSurfaceGradient, mutedPanelSurface, nestedPanelSurface, panelBorder } = getSurfaceTokens(
+    theme,
+    isDark
+  );
+  const { primaryText, secondaryText } = getReadableTextTokens(theme, isDark);
+
+  const controlRowSx = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 2,
+    px: 1.5,
+    py: 1.25,
+    borderRadius: 2,
+    bgcolor: isDark ? withAlpha(palette.background.paper, 0.2) : withAlpha(palette.background.paper, 0.92),
+    border: '1px solid',
+    borderColor: panelBorder
+  };
+
+  const requestHeaders = Array.isArray(airportForm.requestHeaders) ? airportForm.requestHeaders : [];
+  const hasRequestHeaderRows = requestHeaders.length > 0;
+
+  const requestHeaderPanelSx = {
+    p: 1.5,
+    borderRadius: 2,
+    bgcolor: isDark ? withAlpha(palette.background.default, 0.88) : withAlpha(palette.background.default, 0.56),
+    border: '1px solid',
+    borderColor: panelBorder
+  };
+
+  const requestHeaderRowSx = {
+    p: 1.25,
+    borderRadius: 2,
+    bgcolor: isDark ? withAlpha(palette.background.paper, 0.22) : withAlpha(palette.background.paper, 0.96),
+    border: '1px solid',
+    borderColor: panelBorder
+  };
+
+  const addRequestHeaderButtonSx = {
+    minWidth: 0,
+    alignSelf: { xs: 'flex-start', sm: 'center' },
+    px: 1,
+    py: 0.5,
+    borderRadius: 1.5,
+    fontSize: '0.8125rem',
+    fontWeight: 600,
+    lineHeight: 1.2,
+    color: isDark ? palette.primary.light : palette.primary.main,
+    bgcolor: withAlpha(palette.primary.main, isDark ? 0.08 : 0.04),
+    borderColor: withAlpha(palette.primary.main, isDark ? 0.24 : 0.16),
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    '& .MuiButton-startIcon': {
+      mr: 0.5,
+      ml: 0,
+      '& > *:nth-of-type(1)': {
+        fontSize: '1rem'
+      }
+    },
+    '&:hover': {
+      borderColor: withAlpha(palette.primary.main, isDark ? 0.34 : 0.22),
+      bgcolor: withAlpha(palette.primary.main, isDark ? 0.14 : 0.08)
+    }
+  };
+
+  const updateRequestHeaders = (updater) => {
+    const nextRequestHeaders = typeof updater === 'function' ? updater(requestHeaders) : updater;
+    setAirportForm({ ...airportForm, requestHeaders: nextRequestHeaders });
+  };
+
+  const handleRequestHeaderChange = (index, field, value) => {
+    updateRequestHeaders((currentHeaders) =>
+      currentHeaders.map((header, headerIndex) => (headerIndex === index ? { ...header, [field]: value } : header))
+    );
+  };
+
+  const handleAddRequestHeader = () => {
+    updateRequestHeaders((currentHeaders) => [...currentHeaders, createEmptyRequestHeader()]);
+  };
+
+  const handleRemoveRequestHeader = (index) => {
+    updateRequestHeaders((currentHeaders) => currentHeaders.filter((_, headerIndex) => headerIndex !== index));
+  };
+
   return (
     <Dialog
       open={open}
@@ -85,16 +163,29 @@ export default function AirportFormDialog({
       fullWidth
       PaperProps={{
         sx: {
-          maxHeight: '90vh'
+          maxHeight: '90vh',
+          borderRadius: 2.5,
+          border: '1px solid',
+          borderColor: panelBorder,
+          bgcolor: dialogSurface,
+          backgroundImage: dialogSurfaceGradient
         }
       }}
     >
-      <DialogTitle>{isEdit ? '编辑机场' : '添加机场'}</DialogTitle>
-      <DialogContent dividers sx={{ pt: 2.5, pb: 2 }}>
+      <DialogTitle
+        sx={{
+          pb: 1.5,
+          color: primaryText,
+          bgcolor: mutedPanelSurface,
+          borderBottom: '1px solid',
+          borderColor: panelBorder
+        }}
+      >
+        {isEdit ? '编辑机场' : '添加机场'}
+      </DialogTitle>
+      <DialogContent dividers sx={{ pt: 2.5, pb: 2, bgcolor: 'transparent', borderColor: panelBorder }}>
         <Stack spacing={2.5}>
-          {/* ===== 基本信息 ===== */}
-          <Box>
-            <SectionTitle>基本信息</SectionTitle>
+          <AirportDialogSection title="基本信息" surface={nestedPanelSurface} borderColor={panelBorder} titleColor={primaryText}>
             <Stack spacing={2}>
               <TextField
                 fullWidth
@@ -105,7 +196,7 @@ export default function AirportFormDialog({
                 onChange={(e) => setAirportForm({ ...airportForm, name: e.target.value })}
               />
               <Box>
-                <Typography variant="body2" color="textSecondary" sx={{ mb: 1 }}>
+                <Typography variant="body2" sx={{ mb: 1, color: secondaryText }}>
                   Logo（可选）
                 </Typography>
                 <LogoPicker
@@ -144,25 +235,16 @@ export default function AirportFormDialog({
                 onChange={(e) => setAirportForm({ ...airportForm, remark: e.target.value })}
               />
             </Stack>
-          </Box>
+          </AirportDialogSection>
 
-          <Divider />
-
-          {/* ===== 定时更新 ===== */}
-          <Box>
-            <SectionTitle>定时更新</SectionTitle>
+          <AirportDialogSection title="定时更新" surface={nestedPanelSurface} borderColor={panelBorder} titleColor={primaryText}>
             <Stack spacing={2}>
-              {/* 启用定时更新开关 */}
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between'
-                }}
-              >
+              <Box sx={controlRowSx}>
                 <Box>
-                  <Typography variant="body2">启用定时更新</Typography>
-                  <Typography variant="caption" color="textSecondary">
+                  <Typography variant="body2" sx={{ color: primaryText }}>
+                    启用定时更新
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: secondaryText }}>
                     关闭后将停止自动拉取订阅
                   </Typography>
                 </Box>
@@ -176,13 +258,9 @@ export default function AirportFormDialog({
                 />
               </Collapse>
             </Stack>
-          </Box>
+          </AirportDialogSection>
 
-          <Divider />
-
-          {/* ===== 请求设置 ===== */}
-          <Box>
-            <SectionTitle>请求设置</SectionTitle>
+          <AirportDialogSection title="请求设置" surface={nestedPanelSurface} borderColor={panelBorder} titleColor={primaryText}>
             <Stack spacing={2}>
               <Autocomplete
                 freeSolo
@@ -198,8 +276,10 @@ export default function AirportFormDialog({
                 renderOption={(props, option) => (
                   <Box component="li" {...props} key={option.value}>
                     <Box>
-                      <Typography variant="body2">{option.label}</Typography>
-                      <Typography variant="caption" color="textSecondary">
+                      <Typography variant="body2" sx={{ color: primaryText }}>
+                        {option.label}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: secondaryText }}>
                         {option.value}
                       </Typography>
                     </Box>
@@ -210,19 +290,105 @@ export default function AirportFormDialog({
                 )}
               />
 
-              {/* 使用代理下载 */}
+              <Box sx={requestHeaderPanelSx}>
+                <Stack spacing={1.5}>
+                  <Stack
+                    direction={{ xs: 'column', sm: 'row' }}
+                    spacing={1}
+                    justifyContent="space-between"
+                    alignItems={{ xs: 'flex-start', sm: 'flex-start' }}
+                  >
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="body2" sx={{ color: primaryText, fontWeight: 500 }}>
+                        自定义请求头
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: secondaryText }}>
+                        可按行添加额外请求头，空白行不会提交，User-Agent 请使用上方专用字段
+                      </Typography>
+                    </Box>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<AddIcon />}
+                      onClick={handleAddRequestHeader}
+                      sx={addRequestHeaderButtonSx}
+                    >
+                      添加请求头
+                    </Button>
+                  </Stack>
+
+                  {hasRequestHeaderRows ? (
+                    <Stack spacing={1}>
+                      {requestHeaders.map((header, index) => {
+                        const rowError = getRequestHeaderRowError(header);
+
+                        return (
+                          <Box key={`request-header-${index}`} sx={requestHeaderRowSx}>
+                            <Stack spacing={1}>
+                              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
+                                <TextField
+                                  fullWidth
+                                  size="small"
+                                  label="Header Key"
+                                  placeholder="例如：X-Custom-Token"
+                                  value={header.key}
+                                  error={Boolean(rowError)}
+                                  onChange={(e) => handleRequestHeaderChange(index, 'key', e.target.value)}
+                                />
+                                <TextField
+                                  fullWidth
+                                  size="small"
+                                  label="Header Value"
+                                  placeholder="例如：your-value"
+                                  value={header.value}
+                                  onChange={(e) => handleRequestHeaderChange(index, 'value', e.target.value)}
+                                />
+                                <IconButton
+                                  aria-label={`删除第 ${index + 1} 行请求头`}
+                                  color="error"
+                                  onClick={() => handleRemoveRequestHeader(index)}
+                                  sx={{
+                                    alignSelf: { xs: 'flex-end', sm: 'center' },
+                                    border: '1px solid',
+                                    borderColor: withAlpha(palette.error.main, isDark ? 0.32 : 0.22),
+                                    bgcolor: withAlpha(palette.error.main, isDark ? 0.12 : 0.04),
+                                    '&:hover': {
+                                      bgcolor: withAlpha(palette.error.main, isDark ? 0.18 : 0.08)
+                                    }
+                                  }}
+                                >
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </Stack>
+                              {rowError ? (
+                                <Typography variant="caption" color="error">
+                                  {rowError}
+                                </Typography>
+                              ) : (
+                                <Typography variant="caption" sx={{ color: secondaryText }}>
+                                  留空整行会在保存时自动忽略
+                                </Typography>
+                              )}
+                            </Stack>
+                          </Box>
+                        );
+                      })}
+                    </Stack>
+                  ) : (
+                    <Typography variant="caption" sx={{ color: secondaryText }}>
+                      当前未设置额外请求头，可按需添加。
+                    </Typography>
+                  )}
+                </Stack>
+              </Box>
+
               <Box>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    mb: airportForm.downloadWithProxy ? 1.5 : 0
-                  }}
-                >
+                <Box sx={{ ...controlRowSx, mb: airportForm.downloadWithProxy ? 1.5 : 0 }}>
                   <Box>
-                    <Typography variant="body2">使用代理下载</Typography>
-                    <Typography variant="caption" color="textSecondary">
+                    <Typography variant="body2" sx={{ color: primaryText }}>
+                      使用代理下载
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: secondaryText }}>
                       通过代理节点拉取订阅
                     </Typography>
                   </Box>
@@ -245,12 +411,14 @@ export default function AirportFormDialog({
                       proxyNodeOptions.find((n) => n.Link === airportForm.proxyLink) ||
                       (airportForm.proxyLink ? { Link: airportForm.proxyLink, Name: '', ID: 0 } : null)
                     }
-                    onChange={(newValue) => setAirportForm({ ...airportForm, proxyLink: newValue?.Link || '' })}
+                    onChange={(newValue) =>
+                      setAirportForm({ ...airportForm, proxyLink: typeof newValue === 'string' ? newValue : newValue?.Link || '' })
+                    }
                     displayField="Name"
                     valueField="Link"
                     label="代理节点"
-                    placeholder="留空自动选择最佳节点"
-                    helperText="系统将自动选择延迟最低且速度最快的节点"
+                    placeholder="留空则自动选择最佳节点"
+                    helperText="可选择任意现有节点，也可手动输入外部代理链接；留空时系统会自动选择最佳节点。"
                     freeSolo={true}
                     limit={50}
                     size="small"
@@ -258,27 +426,17 @@ export default function AirportFormDialog({
                 </Collapse>
               </Box>
             </Stack>
-          </Box>
+          </AirportDialogSection>
 
-          <Divider />
-
-          {/* ===== 高级选项 ===== */}
-          <Box>
-            <SectionTitle>高级选项</SectionTitle>
+          <AirportDialogSection title="高级选项" surface={nestedPanelSurface} borderColor={panelBorder} titleColor={primaryText}>
             <Stack spacing={1}>
-              {/* 获取用量信息 */}
               <Box>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    py: 0.5
-                  }}
-                >
+                <Box sx={controlRowSx}>
                   <Box>
-                    <Typography variant="body2">获取用量信息</Typography>
-                    <Typography variant="caption" color="textSecondary">
+                    <Typography variant="body2" sx={{ color: primaryText }}>
+                      获取用量信息
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: secondaryText }}>
                       从订阅响应解析流量使用情况
                     </Typography>
                   </Box>
@@ -294,21 +452,15 @@ export default function AirportFormDialog({
                 </Collapse>
               </Box>
 
-              <Divider sx={{ my: 0.5 }} />
+              <Divider sx={{ my: 0.5, borderColor: panelBorder }} />
 
-              {/* 忽略证书验证 */}
               <Box>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    py: 0.5
-                  }}
-                >
+                <Box sx={controlRowSx}>
                   <Box>
-                    <Typography variant="body2">忽略证书验证</Typography>
-                    <Typography variant="caption" color="textSecondary">
+                    <Typography variant="body2" sx={{ color: primaryText }}>
+                      忽略证书验证
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: secondaryText }}>
                       跳过 TLS 证书检查
                     </Typography>
                   </Box>
@@ -324,27 +476,24 @@ export default function AirportFormDialog({
                 </Collapse>
               </Box>
             </Stack>
-          </Box>
+          </AirportDialogSection>
 
-          <Divider />
-
-          {/* ===== 节点处理 ===== */}
-          <Box>
-            <SectionTitle>节点处理（拉取时生效）</SectionTitle>
+          <AirportDialogSection
+            title="节点处理（拉取时生效）"
+            surface={nestedPanelSurface}
+            borderColor={panelBorder}
+            titleColor={primaryText}
+          >
             <Stack spacing={2}>
               <Alert severity="info" icon={false}>
                 <Typography variant="caption">以下规则在拉取订阅时立即生效，过滤的节点不会存储到数据库</Typography>
               </Alert>
-
-              {/* 节点名称过滤 */}
               <NodeNameFilter
                 whitelistValue={airportForm.nodeNameWhitelist || ''}
                 blacklistValue={airportForm.nodeNameBlacklist || ''}
                 onWhitelistChange={(rules) => setAirportForm({ ...airportForm, nodeNameWhitelist: rules })}
                 onBlacklistChange={(rules) => setAirportForm({ ...airportForm, nodeNameBlacklist: rules })}
               />
-
-              {/* 协议过滤 */}
               <NodeProtocolFilter
                 protocolOptions={protocolOptions}
                 whitelistValue={airportForm.protocolWhitelist || ''}
@@ -352,20 +501,14 @@ export default function AirportFormDialog({
                 onWhitelistChange={(protocols) => setAirportForm({ ...airportForm, protocolWhitelist: protocols })}
                 onBlacklistChange={(protocols) => setAirportForm({ ...airportForm, protocolBlacklist: protocols })}
               />
-
-              {/* 节点去重配置 */}
               <AirportDeduplicationConfig
                 value={airportForm.deduplicationRule || ''}
                 onChange={(rule) => setAirportForm({ ...airportForm, deduplicationRule: rule })}
               />
-
-              {/* 节点重命名 */}
               <NodeNamePreprocessor
                 value={airportForm.nodeNamePreprocess || ''}
                 onChange={(rules) => setAirportForm({ ...airportForm, nodeNamePreprocess: rules })}
               />
-
-              {/* 节点名称唯一化 */}
               <NodeNameUniquifyConfig
                 enabled={airportForm.nodeNameUniquify || false}
                 prefix={airportForm.nodeNamePrefix || ''}
@@ -373,10 +516,18 @@ export default function AirportFormDialog({
                 onChange={({ enabled, prefix }) => setAirportForm({ ...airportForm, nodeNameUniquify: enabled, nodeNamePrefix: prefix })}
               />
             </Stack>
-          </Box>
+          </AirportDialogSection>
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, py: 2 }}>
+      <DialogActions
+        sx={{
+          px: 3,
+          py: 2,
+          bgcolor: mutedPanelSurface,
+          borderTop: '1px solid',
+          borderColor: panelBorder
+        }}
+      >
         <Button onClick={onClose}>取消</Button>
         <Button variant="contained" onClick={onSubmit}>
           确定
@@ -399,6 +550,12 @@ AirportFormDialog.propTypes = {
     downloadWithProxy: PropTypes.bool,
     proxyLink: PropTypes.string,
     userAgent: PropTypes.string,
+    requestHeaders: PropTypes.arrayOf(
+      PropTypes.shape({
+        key: PropTypes.string,
+        value: PropTypes.string
+      })
+    ),
     fetchUsageInfo: PropTypes.bool,
     skipTLSVerify: PropTypes.bool,
     remark: PropTypes.string,

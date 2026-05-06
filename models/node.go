@@ -1,12 +1,15 @@
 package models
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"sublink/cache"
+	"sublink/constants"
 	"sublink/database"
 	"sublink/node/protocol"
 	"sublink/utils"
@@ -18,10 +21,11 @@ import (
 
 type Node struct {
 	ID              int    `gorm:"primaryKey"`
-	Link            string `gorm:"uniqueIndex:idx_link_id"` //出站代理原始连接
+	Link            string //出站代理原始连接
+	LinkHash        string `gorm:"size:64;uniqueIndex" json:"-"`
 	Name            string //系统内节点名称
 	LinkName        string //节点原始名称
-	Protocol        string `gorm:"index"` //协议类型 (vmess, vless, trojan, ss 等)
+	Protocol        string `gorm:"size:32;index"` //协议类型 (vmess, vless, trojan, ss 等)
 	LinkAddress     string //节点原始地址
 	LinkHost        string //节点原始Host
 	LinkPort        string //节点原始端口
@@ -42,7 +46,55 @@ type Node struct {
 	UpdatedAt       time.Time `gorm:"autoUpdateTime" json:"UpdatedAt"` // 更新时间
 	Tags            string    // 标签ID，逗号分隔，如 "1,3,5"
 	ContentHash     string    `gorm:"index;size:64"` // 节点内容哈希（SHA256），用于全库去重
+	IsBroadcast     bool      `gorm:"default:false"` // IP来源：true=广播IP false=原生IP
+	IsResidential   bool      `gorm:"default:false"` // 是否住宅IP
+	FraudScore      int       `gorm:"default:-1"`    // 欺诈评分（0-100，-1表示未检测）
+	QualityStatus   string    `gorm:"size:32;default:'untested'"`
+	QualityFamily   string    `gorm:"size:16;default:''"`
+	UnlockSummary   string    `gorm:"type:text"`
+	UnlockCheckAt   string
 }
+
+type NodeSelectorItem struct {
+	ID            int
+	Name          string
+	Group         string
+	Source        string
+	LinkCountry   string
+	UnlockSummary string
+	UnlockCheckAt string
+}
+
+func BuildNodeSelectorItem(node Node) NodeSelectorItem {
+	return NodeSelectorItem{
+		ID:            node.ID,
+		Name:          node.Name,
+		Group:         node.Group,
+		Source:        node.Source,
+		LinkCountry:   node.LinkCountry,
+		UnlockSummary: node.UnlockSummary,
+		UnlockCheckAt: node.UnlockCheckAt,
+	}
+}
+
+func ToNodeSelectorItems(nodes []Node) []NodeSelectorItem {
+	items := make([]NodeSelectorItem, 0, len(nodes))
+	for _, node := range nodes {
+		items = append(items, BuildNodeSelectorItem(node))
+	}
+	return items
+}
+
+const (
+	QualityStatusUntested = "untested"
+	QualityStatusSuccess  = "success"
+	QualityStatusPartial  = "partial"
+	QualityStatusFailed   = "failed"
+	QualityStatusDisabled = "disabled"
+
+	QualityFamilyIPv4 = "ipv4"
+	QualityFamilyIPv6 = "ipv6"
+)
 
 // nodeCache 使用新的泛型缓存，支持二级索引
 var nodeCache *cache.MapCache[int, Node]
@@ -58,6 +110,84 @@ func init() {
 	nodeCache.AddIndex("sourceID", func(n Node) string { return fmt.Sprintf("%d", n.SourceID) })
 	nodeCache.AddIndex("name", func(n Node) string { return n.Name })
 	nodeCache.AddIndex("contentHash", func(n Node) string { return n.ContentHash })
+}
+
+func hashNodeLink(link string) string {
+	sum := sha256.Sum256([]byte(link))
+	return hex.EncodeToString(sum[:])
+}
+
+func (node *Node) syncLinkHash() {
+	node.LinkHash = hashNodeLink(node.Link)
+}
+
+// NormalizeNodeForImport 补齐跨版本迁移时可能缺失的派生字段。
+func NormalizeNodeForImport(node *Node) {
+	if node == nil {
+		return
+	}
+
+	if node.Link != "" {
+		node.syncLinkHash()
+		if node.Protocol == "" {
+			node.Protocol = protocol.GetProtocolFromLink(node.Link)
+		}
+		if node.ContentHash == "" {
+			if proxy, err := protocol.LinkToProxy(protocol.Urls{Url: node.Link}, protocol.OutputConfig{}); err == nil {
+				node.ContentHash = protocol.GenerateProxyContentHash(proxy)
+			}
+		}
+	}
+
+	if node.SpeedStatus == "" {
+		switch {
+		case node.Speed > 0:
+			node.SpeedStatus = "success"
+		case node.Speed == -1:
+			node.SpeedStatus = "error"
+		default:
+			node.SpeedStatus = "untested"
+		}
+	}
+
+	if node.DelayStatus == "" {
+		switch {
+		case node.DelayTime > 0:
+			node.DelayStatus = "success"
+		case node.DelayTime == -1:
+			node.DelayStatus = "timeout"
+		default:
+			node.DelayStatus = "untested"
+		}
+	}
+
+	if node.CreatedAt.IsZero() {
+		node.CreatedAt = time.Now()
+	}
+	if node.UpdatedAt.IsZero() {
+		node.UpdatedAt = node.CreatedAt
+	}
+
+	if node.QualityStatus == "" {
+		switch {
+		case node.FraudScore >= 0:
+			node.QualityStatus = QualityStatusSuccess
+		case node.FraudScore < 0:
+			node.QualityStatus = QualityStatusUntested
+		}
+	}
+
+	if node.QualityFamily == "" && node.LandingIP != "" {
+		if strings.Contains(node.LandingIP, ":") {
+			node.QualityFamily = QualityFamilyIPv6
+		} else {
+			node.QualityFamily = QualityFamilyIPv4
+		}
+	}
+
+	if node.UnlockSummary == "" && node.UnlockCheckAt == "" {
+		node.UnlockSummary = ""
+	}
 }
 
 // InitNodeCache 初始化节点缓存
@@ -84,6 +214,7 @@ func UpdateNodeCache(id int, node Node) {
 
 // Add 添加节点
 func (node *Node) Add() error {
+	node.syncLinkHash()
 	// Write-Through: 先写数据库
 	err := database.DB.Create(node).Error
 	if err != nil {
@@ -96,12 +227,13 @@ func (node *Node) Add() error {
 
 // Update 更新节点
 func (node *Node) Update() error {
+	node.syncLinkHash()
 	if node.Name == "" {
 		node.Name = node.LinkName
 	}
 	node.UpdatedAt = time.Now()
 	// Write-Through: 先写数据库
-	err := database.DB.Model(node).Select("Name", "Link", "DialerProxyName", "Group", "LinkName", "LinkAddress", "LinkHost", "LinkPort", "LinkCountry", "Protocol", "ContentHash", "UpdatedAt").Updates(node).Error
+	err := database.DB.Model(node).Select("Name", "Link", "LinkHash", "DialerProxyName", "Group", "LinkName", "LinkAddress", "LinkHost", "LinkPort", "LinkCountry", "Protocol", "ContentHash", "UpdatedAt").Updates(node).Error
 	if err != nil {
 		return err
 	}
@@ -109,6 +241,7 @@ func (node *Node) Update() error {
 	if cachedNode, ok := nodeCache.Get(node.ID); ok {
 		cachedNode.Name = node.Name
 		cachedNode.Link = node.Link
+		cachedNode.LinkHash = node.LinkHash
 		cachedNode.DialerProxyName = node.DialerProxyName
 		cachedNode.Group = node.Group
 		cachedNode.LinkName = node.LinkName
@@ -132,7 +265,7 @@ func (node *Node) Update() error {
 
 // UpdateSpeed 更新节点测速结果
 func (node *Node) UpdateSpeed() error {
-	err := database.DB.Model(node).Select("Speed", "SpeedStatus", "LinkCountry", "LandingIP", "DelayTime", "DelayStatus", "LatencyCheckAt", "SpeedCheckAt").Updates(node).Error
+	err := database.DB.Model(node).Select("Speed", "SpeedStatus", "LinkCountry", "LandingIP", "DelayTime", "DelayStatus", "LatencyCheckAt", "SpeedCheckAt", "IsBroadcast", "IsResidential", "FraudScore", "QualityStatus", "QualityFamily", "UnlockSummary", "UnlockCheckAt").Updates(node).Error
 	if err != nil {
 		return err
 	}
@@ -146,6 +279,13 @@ func (node *Node) UpdateSpeed() error {
 		cachedNode.SpeedCheckAt = node.SpeedCheckAt
 		cachedNode.LinkCountry = node.LinkCountry
 		cachedNode.LandingIP = node.LandingIP
+		cachedNode.IsBroadcast = node.IsBroadcast
+		cachedNode.IsResidential = node.IsResidential
+		cachedNode.FraudScore = node.FraudScore
+		cachedNode.QualityStatus = node.QualityStatus
+		cachedNode.QualityFamily = node.QualityFamily
+		cachedNode.UnlockSummary = node.UnlockSummary
+		cachedNode.UnlockCheckAt = node.UnlockCheckAt
 		nodeCache.Set(node.ID, cachedNode)
 	}
 	return nil
@@ -163,6 +303,13 @@ type SpeedTestResult struct {
 	LinkCountry     string
 	LandingIP       string
 	SkipSpeedFields bool // 是否跳过速度相关字段更新（用于TCP模式保留速度结果）
+	IsBroadcast     bool // IP来源：true=广播IP
+	IsResidential   bool // 是否住宅IP
+	FraudScore      int  // 欺诈评分（0-100，-1=未检测）
+	QualityStatus   string
+	QualityFamily   string
+	UnlockSummary   string
+	UnlockCheckAt   string
 }
 
 // BatchAddNodes 批量添加节点（高效 + 容错）
@@ -181,9 +328,12 @@ func BatchAddNodes(nodes []Node) error {
 	insertedCount := 0
 
 	for chunkIdx, chunk := range chunks {
+		for i := range chunk {
+			chunk[i].syncLinkHash()
+		}
 		// 尝试批量插入
 		result := database.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "link"}},
+			Columns:   []clause.Column{{Name: "link_hash"}},
 			DoNothing: true,
 		}).Create(&chunk)
 
@@ -211,9 +361,10 @@ func BatchAddNodes(nodes []Node) error {
 func fallbackToIndividualNodeInsert(nodes []Node) int {
 	insertedCount := 0
 	for i := range nodes {
+		nodes[i].syncLinkHash()
 		// 使用 ON CONFLICT DO NOTHING 跳过已存在的节点
 		result := database.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "link"}},
+			Columns:   []clause.Column{{Name: "link_hash"}},
 			DoNothing: true,
 		}).Create(&nodes[i])
 
@@ -311,6 +462,23 @@ var speedResultFields = []speedResultField{
 	{"speed_check_at", func(r SpeedTestResult) string { return fmt.Sprintf("'%s'", escapeSQL(r.SpeedCheckAt)) }},
 	{"link_country", func(r SpeedTestResult) string { return fmt.Sprintf("'%s'", escapeSQL(r.LinkCountry)) }},
 	{"landing_ip", func(r SpeedTestResult) string { return fmt.Sprintf("'%s'", escapeSQL(r.LandingIP)) }},
+	{"is_broadcast", func(r SpeedTestResult) string {
+		if r.IsBroadcast {
+			return "TRUE"
+		}
+		return "FALSE"
+	}},
+	{"is_residential", func(r SpeedTestResult) string {
+		if r.IsResidential {
+			return "TRUE"
+		}
+		return "FALSE"
+	}},
+	{"fraud_score", func(r SpeedTestResult) string { return fmt.Sprintf("%d", r.FraudScore) }},
+	{"quality_status", func(r SpeedTestResult) string { return fmt.Sprintf("'%s'", escapeSQL(r.QualityStatus)) }},
+	{"quality_family", func(r SpeedTestResult) string { return fmt.Sprintf("'%s'", escapeSQL(r.QualityFamily)) }},
+	{"unlock_summary", func(r SpeedTestResult) string { return fmt.Sprintf("'%s'", escapeSQL(r.UnlockSummary)) }},
+	{"unlock_check_at", func(r SpeedTestResult) string { return fmt.Sprintf("'%s'", escapeSQL(r.UnlockCheckAt)) }},
 }
 
 // tryBatchUpdateWithCaseWhen 使用 CASE WHEN 批量更新（高效）
@@ -383,6 +551,13 @@ func batchUpdateNodeCache(chunk []SpeedTestResult, skipSpeed bool) {
 			cachedNode.LatencyCheckAt = r.LatencyCheckAt
 			cachedNode.LinkCountry = r.LinkCountry
 			cachedNode.LandingIP = r.LandingIP
+			cachedNode.IsBroadcast = r.IsBroadcast
+			cachedNode.IsResidential = r.IsResidential
+			cachedNode.FraudScore = r.FraudScore
+			cachedNode.QualityStatus = r.QualityStatus
+			cachedNode.QualityFamily = r.QualityFamily
+			cachedNode.UnlockSummary = r.UnlockSummary
+			cachedNode.UnlockCheckAt = r.UnlockCheckAt
 			nodeCache.Set(r.NodeID, cachedNode)
 		}
 	}
@@ -399,6 +574,13 @@ func fallbackToIndividualSpeedUpdate(chunk []SpeedTestResult, skipSpeed bool) in
 			"latency_check_at": r.LatencyCheckAt,
 			"link_country":     r.LinkCountry,
 			"landing_ip":       r.LandingIP,
+			"is_broadcast":     r.IsBroadcast,
+			"is_residential":   r.IsResidential,
+			"fraud_score":      r.FraudScore,
+			"quality_status":   r.QualityStatus,
+			"quality_family":   r.QualityFamily,
+			"unlock_summary":   r.UnlockSummary,
+			"unlock_check_at":  r.UnlockCheckAt,
 		}
 		if !skipSpeed {
 			updates["speed"] = r.Speed
@@ -426,6 +608,13 @@ func fallbackToIndividualSpeedUpdate(chunk []SpeedTestResult, skipSpeed bool) in
 			cachedNode.LatencyCheckAt = r.LatencyCheckAt
 			cachedNode.LinkCountry = r.LinkCountry
 			cachedNode.LandingIP = r.LandingIP
+			cachedNode.IsBroadcast = r.IsBroadcast
+			cachedNode.IsResidential = r.IsResidential
+			cachedNode.FraudScore = r.FraudScore
+			cachedNode.QualityStatus = r.QualityStatus
+			cachedNode.QualityFamily = r.QualityFamily
+			cachedNode.UnlockSummary = r.UnlockSummary
+			cachedNode.UnlockCheckAt = r.UnlockCheckAt
 			nodeCache.Set(r.NodeID, cachedNode)
 		}
 	}
@@ -470,6 +659,7 @@ func chunkNodes(nodes []Node, chunkSize int) [][]Node {
 func (node *Node) Find() error {
 	// 优先用 link 精确查找（link 全局唯一）
 	if node.Link != "" {
+		node.syncLinkHash()
 		results := nodeCache.Filter(func(n Node) bool {
 			return n.Link == node.Link
 		})
@@ -479,7 +669,7 @@ func (node *Node) Find() error {
 		}
 
 		// 缓存未命中，查 DB
-		err := database.DB.Where("link = ?", node.Link).First(node).Error
+		err := database.DB.Where("link_hash = ?", node.LinkHash).First(node).Error
 		if err != nil {
 			return err
 		}
@@ -591,18 +781,103 @@ func (node *Node) List() ([]Node, error) {
 }
 
 type NodeFilter struct {
-	Search      string   // 搜索关键词（匹配节点名称或链接）
-	Group       string   // 分组过滤
-	Source      string   // 来源过滤
-	Protocol    string   // 协议类型过滤（如 vmess, vless, trojan 等）
-	MaxDelay    int      // 最大延迟(ms)，只显示延迟在此值以下的节点
-	MinSpeed    float64  // 最低速度(MB/s)，只显示速度在此值以上的节点
-	SpeedStatus string   // 速度状态过滤: untested, success, timeout, error
-	DelayStatus string   // 延迟状态过滤: untested, success, timeout, error
-	Countries   []string // 国家代码过滤
-	Tags        []string // 标签过滤（匹配任一标签的节点）
-	SortBy      string   // 排序字段: "delay" 或 "speed"
-	SortOrder   string   // 排序顺序: "asc" 或 "desc"
+	Search          string   // 搜索关键词（匹配节点名称或链接）
+	Group           string   // 分组过滤
+	Source          string   // 来源过滤
+	Protocol        string   // 协议类型过滤（如 vmess, vless, trojan 等）
+	MaxDelay        int      // 最大延迟(ms)，只显示延迟在此值以下的节点
+	MinSpeed        float64  // 最低速度(MB/s)，只显示速度在此值以上的节点
+	SpeedStatus     string   // 速度状态过滤: untested, success, timeout, error
+	DelayStatus     string   // 延迟状态过滤: untested, success, timeout, error
+	Countries       []string // 国家代码过滤
+	Tags            []string // 标签过滤（匹配任一标签的节点）
+	SortBy          string   // 排序字段: "delay" 或 "speed"
+	SortOrder       string   // 排序顺序: "asc" 或 "desc"
+	MaxFraudScore   int      // 最大欺诈评分（0=不限制）
+	ResidentialType string   // 住宅属性过滤: residential/datacenter/untested
+	IPType          string   // IP类型过滤: native/broadcast/untested
+	QualityStatus   string
+	UnlockProvider  string
+	UnlockStatus    string
+	UnlockKeyword   string
+	UnlockRules     []UnlockFilterRule
+	UnlockRuleMode  string
+	ExcludeIDs      []int
+}
+
+func hasNodeQualityData(n Node) bool {
+	return n.QualityStatus == QualityStatusSuccess
+}
+
+func getNodeQualityStatusValue(n Node) string {
+	if n.QualityStatus != "" {
+		return n.QualityStatus
+	}
+	if n.FraudScore >= 0 {
+		return QualityStatusSuccess
+	}
+	return QualityStatusUntested
+}
+
+func getNodeResidentialTypeValue(n Node) string {
+	if !hasNodeQualityData(n) {
+		return "untested"
+	}
+	if n.IsResidential {
+		return "residential"
+	}
+	return "datacenter"
+}
+
+func getNodeIPTypeValue(n Node) string {
+	if !hasNodeQualityData(n) {
+		return "untested"
+	}
+	if n.IsBroadcast {
+		return "broadcast"
+	}
+	return "native"
+}
+
+func matchNodeResidentialType(n Node, residentialType string) bool {
+	switch residentialType {
+	case "", "all":
+		return true
+	case "residential":
+		return getNodeResidentialTypeValue(n) == "residential"
+	case "datacenter":
+		return getNodeResidentialTypeValue(n) == "datacenter"
+	case "untested":
+		return getNodeResidentialTypeValue(n) == "untested"
+	default:
+		return true
+	}
+}
+
+func matchNodeIPType(n Node, ipType string) bool {
+	switch ipType {
+	case "", "all":
+		return true
+	case "native":
+		return getNodeIPTypeValue(n) == "native"
+	case "broadcast":
+		return getNodeIPTypeValue(n) == "broadcast"
+	case "untested":
+		return getNodeIPTypeValue(n) == "untested"
+	default:
+		return true
+	}
+}
+
+func matchNodeQualityStatus(n Node, qualityStatus string) bool {
+	switch qualityStatus {
+	case "", "all":
+		return true
+	case QualityStatusUntested, QualityStatusSuccess, QualityStatusPartial, QualityStatusFailed, QualityStatusDisabled:
+		return getNodeQualityStatusValue(n) == qualityStatus
+	default:
+		return true
+	}
 }
 
 // ListWithFilters 根据过滤条件获取节点列表
@@ -621,14 +896,35 @@ func (node *Node) ListWithFilters(filter NodeFilter) ([]Node, error) {
 	for _, t := range filter.Tags {
 		tagMap[t] = true
 	}
+	excludeMap := make(map[int]bool)
+	for _, id := range filter.ExcludeIDs {
+		if id > 0 {
+			excludeMap[id] = true
+		}
+	}
+
+	unlockRules := filter.UnlockRules
+	if len(unlockRules) == 0 && (filter.UnlockProvider != "" || filter.UnlockStatus != "" || filter.UnlockKeyword != "") {
+		unlockRules = []UnlockFilterRule{{Provider: filter.UnlockProvider, Status: filter.UnlockStatus, Keyword: filter.UnlockKeyword}}
+	}
+	unlockRuleMode := NormalizeUnlockRuleMode(filter.UnlockRuleMode)
+	needsUnlockSummary := searchLower != "" || len(unlockRules) > 0
 
 	// 使用缓存的 Filter 方法
 	nodes := nodeCache.Filter(func(n Node) bool {
+		if excludeMap[n.ID] {
+			return false
+		}
+		var unlockSummary UnlockSummary
+		if needsUnlockSummary {
+			unlockSummary = ParseUnlockSummary(n.UnlockSummary)
+		}
+
 		// 搜索过滤
 		if searchLower != "" {
 			nameLower := strings.ToLower(n.Name)
 			linkLower := strings.ToLower(n.Link)
-			if !strings.Contains(nameLower, searchLower) && !strings.Contains(linkLower, searchLower) {
+			if !strings.Contains(nameLower, searchLower) && !strings.Contains(linkLower, searchLower) && !MatchUnlockSummary(unlockSummary, "", "", searchLower) {
 				return false
 			}
 		}
@@ -717,6 +1013,33 @@ func (node *Node) ListWithFilters(filter NodeFilter) ([]Node, error) {
 			if !strings.EqualFold(n.Protocol, filter.Protocol) {
 				return false
 			}
+		}
+
+		// 最大欺诈评分过滤
+		if filter.MaxFraudScore > 0 {
+			if getNodeQualityStatusValue(n) != QualityStatusSuccess || n.FraudScore < 0 || n.FraudScore > filter.MaxFraudScore {
+				return false
+			}
+		}
+
+		if !matchNodeQualityStatus(n, filter.QualityStatus) {
+			return false
+		}
+
+		if len(unlockRules) > 0 {
+			if !MatchUnlockSummaryRulesWithMode(unlockSummary, unlockRules, unlockRuleMode) {
+				return false
+			}
+		}
+
+		// 住宅属性过滤
+		if !matchNodeResidentialType(n, filter.ResidentialType) {
+			return false
+		}
+
+		// IP类型过滤
+		if !matchNodeIPType(n, filter.IPType) {
+			return false
 		}
 
 		return true
@@ -912,10 +1235,11 @@ func (node *Node) Del() error {
 
 // UpsertNode 插入或更新节点
 func (node *Node) UpsertNode() error {
+	node.syncLinkHash()
 	// Write-Through: 先写数据库
 	err := database.DB.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "link"}},
-		DoUpdates: clause.AssignmentColumns([]string{"name", "link_name", "link_address", "link_host", "link_port", "link_country", "source", "source_id", "group"}),
+		Columns:   []clause.Column{{Name: "link_hash"}},
+		DoUpdates: clause.AssignmentColumns([]string{"link", "name", "link_name", "link_address", "link_host", "link_port", "link_country", "source", "source_id", "group"}),
 	}).Create(node).Error
 	if err != nil {
 		return err
@@ -923,7 +1247,7 @@ func (node *Node) UpsertNode() error {
 
 	// 查询更新后的节点并更新缓存
 	var updatedNode Node
-	if err := database.DB.Where("link = ?", node.Link).First(&updatedNode).Error; err == nil {
+	if err := database.DB.Where("link_hash = ?", node.LinkHash).First(&updatedNode).Error; err == nil {
 		nodeCache.Set(updatedNode.ID, updatedNode)
 		*node = updatedNode
 	}
@@ -1269,6 +1593,50 @@ func GetNodeCountryStats() map[string]int {
 	return stats
 }
 
+func GetDashboardCountryStats() []CountryDashboardStat {
+	allNodes := nodeCache.GetAll()
+	type countryAccumulator struct {
+		nodeCount int
+		ipSet     map[string]struct{}
+	}
+
+	statsMap := make(map[string]*countryAccumulator)
+	for _, n := range allNodes {
+		country := n.LinkCountry
+		if country == "" {
+			country = "未知"
+		}
+
+		if _, exists := statsMap[country]; !exists {
+			statsMap[country] = &countryAccumulator{ipSet: make(map[string]struct{})}
+		}
+
+		statsMap[country].nodeCount++
+		landingIP := strings.TrimSpace(n.LandingIP)
+		if landingIP != "" {
+			statsMap[country].ipSet[landingIP] = struct{}{}
+		}
+	}
+
+	result := make([]CountryDashboardStat, 0, len(statsMap))
+	for country, stat := range statsMap {
+		result = append(result, CountryDashboardStat{
+			Country:       country,
+			NodeCount:     stat.nodeCount,
+			UniqueIPCount: len(stat.ipSet),
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].NodeCount == result[j].NodeCount {
+			return result[i].Country < result[j].Country
+		}
+		return result[i].NodeCount > result[j].NodeCount
+	})
+
+	return result
+}
+
 // GetNodeProtocolStats 获取按协议统计的节点数量
 func GetNodeProtocolStats() map[string]int {
 	stats := make(map[string]int)
@@ -1327,9 +1695,54 @@ func GetNodeByID(id int) (*Node, bool) {
 
 // TagStat 标签统计结构
 type TagStat struct {
-	Name  string `json:"name"`
-	Color string `json:"color"`
+	Name           string `json:"name"`
+	Color          string `json:"color"`
+	Count          int    `json:"count"`
+	DelayPassCount int    `json:"delayPassCount,omitempty"`
+	SpeedPassCount int    `json:"speedPassCount,omitempty"`
+}
+
+type CountryDashboardStat struct {
+	Country       string `json:"country"`
+	NodeCount     int    `json:"nodeCount"`
+	UniqueIPCount int    `json:"uniqueIpCount"`
+}
+
+type DashboardCountStat struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
 	Count int    `json:"count"`
+}
+
+type DashboardGroupedBucketStat struct {
+	Label          string `json:"label"`
+	Count          int    `json:"count"`
+	DelayPassCount int    `json:"delayPassCount"`
+	SpeedPassCount int    `json:"speedPassCount"`
+}
+
+type DashboardGroupedStats struct {
+	ProtocolStats map[string]DashboardGroupedBucketStat `json:"protocolStats"`
+	TagStats      []TagStat                             `json:"tagStats"`
+	GroupStats    map[string]DashboardGroupedBucketStat `json:"groupStats"`
+	SourceStats   map[string]DashboardGroupedBucketStat `json:"sourceStats"`
+}
+
+type DashboardFraudRangeStat struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Min   int    `json:"min"`
+	Max   int    `json:"max"`
+	Count int    `json:"count"`
+}
+
+type DashboardQualityStats struct {
+	Total           int                       `json:"total"`
+	SuccessTotal    int                       `json:"successTotal"`
+	OtherTotal      int                       `json:"otherTotal"`
+	IPStats         []DashboardCountStat      `json:"ipStats"`
+	FraudScoreStats []DashboardFraudRangeStat `json:"fraudScoreStats"`
+	QualityStatus   []DashboardCountStat      `json:"qualityStatus"`
 }
 
 // GetNodeTagStats 获取按标签统计的节点数量
@@ -1375,6 +1788,217 @@ func GetNodeTagStats() []TagStat {
 	}
 
 	return result
+}
+
+func getProtocolStatLabel(node Node) string {
+	protoName := node.Protocol
+	if protoName == "" {
+		protoName = protocol.GetProtocolFromLink(node.Link)
+	}
+	return protocol.GetProtocolLabel(protoName)
+}
+
+func getGroupStatLabel(node Node) string {
+	if node.Group == "" {
+		return "未分组"
+	}
+	return node.Group
+}
+
+func getSourceStatLabel(node Node) string {
+	if node.Source == "" || node.Source == "manual" {
+		return "手动添加"
+	}
+	return node.Source
+}
+
+func isNodeDelayPass(node Node) bool {
+	return node.DelayStatus == constants.StatusSuccess && node.DelayTime > 0
+}
+
+func isNodeSpeedPass(node Node) bool {
+	return node.SpeedStatus == constants.StatusSuccess && node.Speed > 0
+}
+
+func addDashboardGroupedBucket(stats map[string]DashboardGroupedBucketStat, key string, delayPass bool, speedPass bool) {
+	bucket := stats[key]
+	if bucket.Label == "" {
+		bucket.Label = key
+	}
+	bucket.Count++
+	if delayPass {
+		bucket.DelayPassCount++
+	}
+	if speedPass {
+		bucket.SpeedPassCount++
+	}
+	stats[key] = bucket
+}
+
+func GetDashboardGroupedStats() DashboardGroupedStats {
+	allNodes := nodeCache.GetAll()
+	protocolStats := make(map[string]DashboardGroupedBucketStat)
+	groupStats := make(map[string]DashboardGroupedBucketStat)
+	sourceStats := make(map[string]DashboardGroupedBucketStat)
+	tagStatsMap := make(map[string]*TagStat)
+	noTagStat := &TagStat{Name: "无标签", Color: "#9e9e9e"}
+
+	for _, node := range allNodes {
+		delayPass := isNodeDelayPass(node)
+		speedPass := isNodeSpeedPass(node)
+
+		addDashboardGroupedBucket(protocolStats, getProtocolStatLabel(node), delayPass, speedPass)
+		addDashboardGroupedBucket(groupStats, getGroupStatLabel(node), delayPass, speedPass)
+		addDashboardGroupedBucket(sourceStats, getSourceStatLabel(node), delayPass, speedPass)
+
+		tagNames := node.GetTagNames()
+		if len(tagNames) == 0 {
+			noTagStat.Count++
+			if delayPass {
+				noTagStat.DelayPassCount++
+			}
+			if speedPass {
+				noTagStat.SpeedPassCount++
+			}
+			continue
+		}
+
+		for _, tagName := range tagNames {
+			tagStat, ok := tagStatsMap[tagName]
+			if !ok {
+				color := "#1976d2"
+				if tag, exists := tagCache.Get(tagName); exists {
+					color = tag.Color
+				}
+				tagStat = &TagStat{Name: tagName, Color: color}
+				tagStatsMap[tagName] = tagStat
+			}
+
+			tagStat.Count++
+			if delayPass {
+				tagStat.DelayPassCount++
+			}
+			if speedPass {
+				tagStat.SpeedPassCount++
+			}
+		}
+	}
+
+	tagStats := make([]TagStat, 0, len(tagStatsMap)+1)
+	if noTagStat.Count > 0 {
+		tagStats = append(tagStats, *noTagStat)
+	}
+	for _, stat := range tagStatsMap {
+		tagStats = append(tagStats, *stat)
+	}
+
+	sort.Slice(tagStats, func(i, j int) bool {
+		if tagStats[i].Count == tagStats[j].Count {
+			return tagStats[i].Name < tagStats[j].Name
+		}
+		return tagStats[i].Count > tagStats[j].Count
+	})
+
+	return DashboardGroupedStats{
+		ProtocolStats: protocolStats,
+		TagStats:      tagStats,
+		GroupStats:    groupStats,
+		SourceStats:   sourceStats,
+	}
+}
+
+func GetDashboardQualityStats() DashboardQualityStats {
+	allNodes := nodeCache.GetAll()
+
+	ipStats := []DashboardCountStat{
+		{Key: "housing", Label: "住房IP", Count: 0},
+		{Key: "datacenter", Label: "机房IP", Count: 0},
+		{Key: "native", Label: "原生IP", Count: 0},
+		{Key: "broadcast", Label: "广播IP", Count: 0},
+		{Key: "other", Label: "其他", Count: 0},
+	}
+
+	fraudStats := []DashboardFraudRangeStat{
+		{Key: "excellent-plus", Label: "极佳 (0-10)", Min: 0, Max: 10, Count: 0},
+		{Key: "excellent", Label: "优秀 (11-30)", Min: 11, Max: 30, Count: 0},
+		{Key: "good", Label: "良好 (31-50)", Min: 31, Max: 50, Count: 0},
+		{Key: "medium", Label: "中等 (51-70)", Min: 51, Max: 70, Count: 0},
+		{Key: "poor", Label: "差 (71-89)", Min: 71, Max: 89, Count: 0},
+		{Key: "very-poor", Label: "极差 (90+)", Min: 90, Max: 100, Count: 0},
+	}
+
+	qualityStatus := []DashboardCountStat{
+		{Key: QualityStatusSuccess, Label: "完整结果", Count: 0},
+		{Key: QualityStatusPartial, Label: "信息不全", Count: 0},
+		{Key: QualityStatusFailed, Label: "检测失败", Count: 0},
+		{Key: QualityStatusDisabled, Label: "未启用", Count: 0},
+		{Key: QualityStatusUntested, Label: "未检测", Count: 0},
+	}
+
+	findFraudBucketIndex := func(score int) int {
+		for index, bucket := range fraudStats {
+			if score >= bucket.Min && score <= bucket.Max {
+				return index
+			}
+		}
+		if score >= 90 {
+			return len(fraudStats) - 1
+		}
+		return -1
+	}
+
+	findQualityStatusIndex := func(status string) int {
+		for index, item := range qualityStatus {
+			if item.Key == status {
+				return index
+			}
+		}
+		return len(qualityStatus) - 1
+	}
+
+	stats := DashboardQualityStats{
+		Total:           len(allNodes),
+		SuccessTotal:    0,
+		OtherTotal:      0,
+		IPStats:         ipStats,
+		FraudScoreStats: fraudStats,
+		QualityStatus:   qualityStatus,
+	}
+
+	for _, n := range allNodes {
+		status := getNodeQualityStatusValue(n)
+		statusIndex := findQualityStatusIndex(status)
+		stats.QualityStatus[statusIndex].Count++
+
+		if status != QualityStatusSuccess {
+			stats.IPStats[4].Count++
+			stats.OtherTotal++
+			continue
+		}
+
+		stats.SuccessTotal++
+
+		if getNodeResidentialTypeValue(n) == "residential" {
+			stats.IPStats[0].Count++
+		} else {
+			stats.IPStats[1].Count++
+		}
+
+		if getNodeIPTypeValue(n) == "broadcast" {
+			stats.IPStats[3].Count++
+		} else {
+			stats.IPStats[2].Count++
+		}
+
+		if n.FraudScore >= 0 {
+			bucketIndex := findFraudBucketIndex(n.FraudScore)
+			if bucketIndex >= 0 {
+				stats.FraudScoreStats[bucketIndex].Count++
+			}
+		}
+	}
+
+	return stats
 }
 
 // GetNodeGroupStats 获取按分组统计的节点数量
@@ -1439,6 +2063,7 @@ func InitNodeFieldsMeta() {
 		"Source":          "来源",
 		"SourceID":        "来源ID",
 		"Group":           "分组",
+		"FraudScore":      "欺诈评分",
 	}
 
 	t := reflect.TypeOf(Node{})

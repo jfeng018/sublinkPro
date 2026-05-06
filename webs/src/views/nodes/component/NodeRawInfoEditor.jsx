@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import PropTypes from 'prop-types';
 
 // material-ui
-import { useTheme, alpha } from '@mui/material/styles';
+import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import Accordion from '@mui/material/Accordion';
 import AccordionSummary from '@mui/material/AccordionSummary';
@@ -15,6 +15,7 @@ import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import Stack from '@mui/material/Stack';
 import Switch from '@mui/material/Switch';
+import InputAdornment from '@mui/material/InputAdornment';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
@@ -27,13 +28,17 @@ import SaveIcon from '@mui/icons-material/Save';
 import RestoreIcon from '@mui/icons-material/Restore';
 import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SecurityIcon from '@mui/icons-material/Security';
 import NetworkCheckIcon from '@mui/icons-material/NetworkCheck';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
 
 // api
 import { parseNodeLink, updateNodeRawInfo } from '../../../api/nodes';
+import { buildFieldMetaMap, getFieldGroupKey } from '../../../utils/protocolPresentation';
+import { getNodeColorChipSx, getNodeFieldControlSx, getNodeThemeTokens } from '../nodeTheme';
 
 /**
  * 字段分组配置
@@ -73,20 +78,12 @@ const FIELD_GROUPS = {
       'ClientFingerprint',
       'AllowInsecure'
     ]
+  },
+  advanced: {
+    label: '高级配置',
+    icon: <SettingsIcon fontSize="small" />,
+    keywords: []
   }
-};
-
-/**
- * 获取字段所属分组
- */
-const getFieldGroup = (fieldName) => {
-  const baseName = fieldName.split('.').pop();
-  for (const [groupKey, group] of Object.entries(FIELD_GROUPS)) {
-    if (group.keywords.some((keyword) => baseName.toLowerCase().includes(keyword.toLowerCase()))) {
-      return groupKey;
-    }
-  }
-  return 'other';
 };
 
 /**
@@ -104,9 +101,13 @@ const getFieldLabel = (fieldName, fieldMeta) => {
 /**
  * 渲染字段输入控件
  */
-const FieldInput = ({ fieldName, fieldMeta, value, onChange, disabled }) => {
+const FieldInput = ({ fieldName, fieldMeta, value, onChange, disabled, fieldSx }) => {
+  const [showSecret, setShowSecret] = useState(false);
   const fieldType = fieldMeta?.type || 'string';
   const label = getFieldLabel(fieldName, fieldMeta);
+  const placeholder = fieldMeta?.placeholder || '';
+  const helperText = fieldMeta?.description || '';
+  const multiline = fieldMeta?.multiline || String(value ?? '').length > 50;
 
   // 布尔类型使用开关
   if (fieldType === 'bool') {
@@ -137,22 +138,67 @@ const FieldInput = ({ fieldName, fieldMeta, value, onChange, disabled }) => {
         size="small"
         fullWidth
         variant="outlined"
+        placeholder={placeholder}
+        helperText={helperText}
+        sx={fieldSx}
       />
+    );
+  }
+
+  if (Array.isArray(fieldMeta?.options) && fieldMeta.options.length > 0) {
+    return (
+      <TextField
+        label={label}
+        value={value ?? ''}
+        onChange={(e) => onChange(fieldName, e.target.value)}
+        disabled={disabled}
+        size="small"
+        fullWidth
+        variant="outlined"
+        select
+        SelectProps={{ native: true }}
+        InputLabelProps={{ shrink: true }}
+        helperText={helperText}
+        sx={fieldSx}
+      >
+        <option value="">请选择</option>
+        {fieldMeta.options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </TextField>
     );
   }
 
   return (
     <TextField
       label={label}
-      type={'text'}
+      type={fieldMeta?.secret && !showSecret ? 'password' : 'text'}
       value={value ?? ''}
       onChange={(e) => onChange(fieldName, e.target.value)}
       disabled={disabled}
       size="small"
       fullWidth
       variant="outlined"
-      multiline={String(value).length > 50}
+      placeholder={placeholder}
+      helperText={helperText}
+      multiline={multiline}
       maxRows={3}
+      sx={fieldSx}
+      InputProps={
+        fieldMeta?.secret
+          ? {
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton edge="end" size="small" onClick={() => setShowSecret((prev) => !prev)} disabled={disabled}>
+                    {showSecret ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                  </IconButton>
+                </InputAdornment>
+              )
+            }
+          : undefined
+      }
     />
   );
 };
@@ -162,7 +208,8 @@ FieldInput.propTypes = {
   fieldMeta: PropTypes.object,
   value: PropTypes.any,
   onChange: PropTypes.func.isRequired,
-  disabled: PropTypes.bool
+  disabled: PropTypes.bool,
+  fieldSx: PropTypes.object
 };
 
 /**
@@ -171,6 +218,9 @@ FieldInput.propTypes = {
 export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMessage }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const { isDark } = useResolvedColorScheme();
+  const tokens = getNodeThemeTokens(theme, isDark);
+  const fieldControlSx = getNodeFieldControlSx(tokens);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -189,11 +239,7 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
   // 创建字段元数据映射
   const fieldMetaMap = useMemo(() => {
     if (!currentProtocolMeta?.fields) return {};
-    const map = {};
-    currentProtocolMeta.fields.forEach((f) => {
-      map[f.name] = f;
-    });
-    return map;
+    return buildFieldMetaMap(currentProtocolMeta.fields);
   }, [currentProtocolMeta]);
 
   // 解析节点链接
@@ -210,6 +256,7 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
         if (res.data) {
           setParsedInfo(res.data);
           setEditedFields(res.data.fields || {});
+          setExpandedGroups(['basic']);
         }
       })
       .catch((err) => {
@@ -218,6 +265,21 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
       })
       .finally(() => setLoading(false));
   }, [node?.Link]);
+
+  useEffect(() => {
+    if (!editedFields || Object.keys(editedFields).length === 0) {
+      return;
+    }
+
+    const autoExpanded = ['basic'];
+    Object.keys(editedFields).forEach((fieldName) => {
+      const groupKey = getFieldGroupKey(fieldName, fieldMetaMap[fieldName]);
+      if (groupKey !== 'advanced' && !autoExpanded.includes(groupKey)) {
+        autoExpanded.push(groupKey);
+      }
+    });
+    setExpandedGroups(autoExpanded);
+  }, [editedFields, fieldMetaMap]);
 
   // 按分组组织字段
   const groupedFields = useMemo(() => {
@@ -228,12 +290,14 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
       auth: [],
       transport: [],
       tls: [],
+      advanced: [],
       other: []
     };
 
     Object.keys(editedFields).forEach((fieldName) => {
-      const group = getFieldGroup(fieldName);
-      groups[group].push(fieldName);
+      const group = getFieldGroupKey(fieldName, fieldMetaMap[fieldName]);
+      const targetGroup = groups[group] ? group : 'other';
+      groups[targetGroup].push(fieldName);
     });
 
     // 移除空分组
@@ -244,7 +308,7 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
     });
 
     return groups;
-  }, [editedFields]);
+  }, [editedFields, fieldMetaMap]);
 
   // 处理字段值变更
   const handleFieldChange = (fieldName, value) => {
@@ -315,11 +379,7 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
           <Chip
             label={currentProtocolMeta?.label || parsedInfo.protocol}
             size="small"
-            sx={{
-              bgcolor: currentProtocolMeta?.color || theme.palette.primary.main,
-              color: '#fff',
-              fontWeight: 600
-            }}
+            sx={getNodeColorChipSx(theme, tokens, currentProtocolMeta?.color || theme.palette.primary.main)}
           />
           <Typography variant="caption" color="text.secondary">
             {Object.keys(editedFields).length} 个字段
@@ -331,7 +391,7 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
             size="small"
             onClick={() => setEditMode(!editMode)}
             sx={{
-              bgcolor: editMode ? alpha(theme.palette.primary.main, 0.1) : 'transparent',
+              bgcolor: editMode ? tokens.hoverSurface : 'transparent',
               color: editMode ? 'primary.main' : 'text.secondary'
             }}
           >
@@ -352,10 +412,10 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
             disableGutters
             elevation={0}
             sx={{
-              bgcolor: 'transparent',
+              bgcolor: tokens.nestedPanelSurface,
               '&:before': { display: 'none' },
               border: '1px solid',
-              borderColor: 'divider',
+              borderColor: tokens.softBorder,
               borderRadius: 2,
               mb: 1,
               overflow: 'hidden'
@@ -364,8 +424,15 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
             <AccordionSummary
               expandIcon={<ExpandMoreIcon />}
               sx={{
-                minHeight: 48,
-                '& .MuiAccordionSummary-content': { my: 1 }
+                minHeight: 52,
+                bgcolor: tokens.toolbarSurface,
+                '&.Mui-expanded': {
+                  minHeight: 52
+                },
+                '& .MuiAccordionSummary-content, & .MuiAccordionSummary-content.Mui-expanded': {
+                  my: 1.25,
+                  alignItems: 'center'
+                }
               }}
             >
               <Stack direction="row" alignItems="center" spacing={1}>
@@ -373,11 +440,29 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
                 <Typography variant="subtitle2" fontWeight={600}>
                   {groupConfig.label}
                 </Typography>
-                <Chip label={fields.length} size="small" sx={{ height: 20, fontSize: 11 }} />
+                <Chip
+                  label={fields.length}
+                  size="small"
+                  sx={{
+                    height: 20,
+                    fontSize: 11,
+                    bgcolor: tokens.fieldSurface,
+                    color: tokens.primaryText,
+                    border: '1px solid',
+                    borderColor: tokens.subtleBorder
+                  }}
+                />
               </Stack>
             </AccordionSummary>
-            <AccordionDetails sx={{ pt: 0 }}>
-              <Stack spacing={isMobile ? 2 : 1.5}>
+            <AccordionDetails sx={{ pt: 2.75, pb: 1.5 }}>
+              <Stack
+                spacing={isMobile ? 2 : 1.5}
+                sx={{
+                  '& > :first-of-type': {
+                    mt: 0.5
+                  }
+                }}
+              >
                 {fields.map((fieldName) => (
                   <Box key={fieldName}>
                     <FieldInput
@@ -386,6 +471,7 @@ export default function NodeRawInfoEditor({ node, protocolMeta, onUpdate, showMe
                       value={editedFields[fieldName]}
                       onChange={handleFieldChange}
                       disabled={!editMode}
+                      fieldSx={fieldControlSx}
                     />
                   </Box>
                 ))}

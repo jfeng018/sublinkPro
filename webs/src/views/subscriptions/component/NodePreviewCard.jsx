@@ -1,52 +1,28 @@
 import PropTypes from 'prop-types';
-import { useMemo } from 'react';
 
 // material-ui
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-
-/**
- * 协议对应的渐变色主题
- * 优化原则：使用高饱和度深色渐变，确保白色文字始终清晰可读
- */
-const protocolThemes = {
-  VMess: { bg: 'linear-gradient(135deg, #5046e5 0%, #7c3aed 100%)' },
-  VLESS: { bg: 'linear-gradient(135deg, #db2777 0%, #9333ea 100%)' },
-  Trojan: { bg: 'linear-gradient(135deg, #0284c7 0%, #0891b2 100%)' },
-  SS: { bg: 'linear-gradient(135deg, #059669 0%, #10b981 100%)' },
-  Shadowsocks: { bg: 'linear-gradient(135deg, #059669 0%, #10b981 100%)' },
-  SSR: { bg: 'linear-gradient(135deg, #ea580c 0%, #f97316 100%)' },
-  ShadowsocksR: { bg: 'linear-gradient(135deg, #ea580c 0%, #f97316 100%)' },
-  Hysteria: { bg: 'linear-gradient(135deg, #6d28d9 0%, #8b5cf6 100%)' },
-  Hysteria2: { bg: 'linear-gradient(135deg, #be185d 0%, #ec4899 100%)' },
-  TUIC: { bg: 'linear-gradient(135deg, #4f46e5 0%, #8b5cf6 100%)' },
-  WireGuard: { bg: 'linear-gradient(135deg, #1e40af 0%, #7c3aed 100%)' },
-  Naive: { bg: 'linear-gradient(135deg, #b45309 0%, #d97706 100%)' },
-  NaiveProxy: { bg: 'linear-gradient(135deg, #b45309 0%, #d97706 100%)' },
-  Reality: { bg: 'linear-gradient(135deg, #0f766e 0%, #0d9488 100%)' },
-  SOCKS5: { bg: 'linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%)' },
-  AnyTLS: { bg: 'linear-gradient(135deg, #047857 0%, #10b981 100%)' },
-  HTTP: { bg: 'linear-gradient(135deg, #0288d1 0%, #01579b 100%)' },
-  HTTPS: { bg: 'linear-gradient(135deg, #01579b 0%, #0277bd 100%)' }
-};
-
-const defaultTheme = { bg: 'linear-gradient(135deg, #5046e5 0%, #7c3aed 100%)' };
+import { alpha, useTheme } from '@mui/material/styles';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
+import { getProtocolPresentation } from '../../../utils/protocolPresentation';
+import { withAlpha } from '../../../utils/colorUtils';
 
 /**
  * 获取状态颜色
  */
-const getStatusColor = (status) => {
+const getStatusColor = (theme, status) => {
   switch (status) {
     case 'success':
-      return '#4caf50';
+      return theme.palette.success.main;
     case 'warning':
-      return '#ff9800';
+      return theme.palette.warning.main;
     case 'error':
-      return '#f44336';
+      return theme.palette.error.main;
     default:
-      return '#9e9e9e';
+      return theme.palette.text.secondary;
   }
 };
 
@@ -78,13 +54,17 @@ const getSpeedDisplay = (speed, speedStatus) => {
  * 节点预览卡片组件 - 固定尺寸紧凑卡片
  */
 export default function NodePreviewCard({ node, onClick }) {
-  const theme = useMemo(() => {
-    return protocolThemes[node.Protocol] || defaultTheme;
-  }, [node.Protocol]);
+  const theme = useTheme();
+  const { isDark } = useResolvedColorScheme();
+  const palette = theme.vars?.palette || theme.palette;
 
   const delayDisplay = getDelayDisplay(node.DelayTime, node.DelayStatus);
   const speedDisplay = getSpeedDisplay(node.Speed, node.SpeedStatus);
   const displayName = node.PreviewName || node.Name || node.OriginalName || '未知节点';
+  const protocolInfo = getProtocolPresentation(node.Protocol);
+  const protocolColor = protocolInfo.color || theme.palette.primary.main;
+  const footerBackground = isDark ? withAlpha(palette.background.default, 0.92) : withAlpha(palette.background.default, 0.88);
+  const footerBorderColor = isDark ? withAlpha(palette.divider, 0.82) : withAlpha(palette.divider, 0.9);
 
   return (
     <Box
@@ -99,14 +79,22 @@ export default function NodePreviewCard({ node, onClick }) {
         height: 88,
         display: 'flex',
         flexDirection: 'column',
-        background: theme.bg,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        bgcolor: 'background.paper',
+        border: '1px solid',
+        borderColor: alpha(theme.palette.divider, 0.9),
+        boxShadow: isDark ? `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.03)}` : theme.shadows[1],
+        transition: 'border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          inset: 0,
+          borderTop: `3px solid ${protocolColor}`,
+          pointerEvents: 'none'
+        },
         '&:hover': {
-          transform: 'translateY(-4px) scale(1.02)',
-          boxShadow: '0 12px 24px rgba(0,0,0,0.15), 0 4px 8px rgba(0,0,0,0.1)',
-          outline: '2px solid rgba(255,255,255,0.3)',
-          outlineOffset: '-2px',
+          transform: 'translateY(-1px)',
+          borderColor: alpha(protocolColor, 0.35),
+          boxShadow: isDark ? `0 0 0 1px ${alpha(protocolColor, 0.18)}` : theme.shadows[3],
           '& .protocol-badge': {
             transform: 'scale(1.1)'
           },
@@ -116,7 +104,7 @@ export default function NodePreviewCard({ node, onClick }) {
         },
         '&:active': {
           transform: 'scale(0.98)',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+          boxShadow: theme.shadows[2]
         }
       }}
     >
@@ -130,11 +118,14 @@ export default function NodePreviewCard({ node, onClick }) {
           px: 0.75,
           py: 0.25,
           borderRadius: 0.75,
-          bgcolor: 'rgba(0,0,0,0.25)',
+          bgcolor: alpha(protocolColor, 0.12),
+          color: protocolColor,
+          border: '1px solid',
+          borderColor: alpha(protocolColor, 0.2),
           transition: 'all 0.3s ease'
         }}
       >
-        <Typography sx={{ color: '#fff', fontSize: 9, fontWeight: 700 }}>{node.Protocol || '?'}</Typography>
+        <Typography sx={{ color: 'inherit', fontSize: 9, fontWeight: 700 }}>{node.Protocol || '?'}</Typography>
       </Box>
 
       {/* 节点名称区域 */}
@@ -142,7 +133,7 @@ export default function NodePreviewCard({ node, onClick }) {
         <Tooltip title={displayName} placement="top" arrow>
           <Typography
             sx={{
-              color: '#fff',
+              color: 'text.primary',
               fontWeight: 600,
               fontSize: 11,
               lineHeight: 1.3,
@@ -158,7 +149,7 @@ export default function NodePreviewCard({ node, onClick }) {
         {node.Group && (
           <Typography
             sx={{
-              color: 'rgba(255,255,255,0.75)',
+              color: 'text.secondary',
               fontSize: 9,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -180,11 +171,14 @@ export default function NodePreviewCard({ node, onClick }) {
           right: 0,
           px: 1,
           py: 0.5,
-          bgcolor: 'rgba(0,0,0,0.4)',
+          background: footerBackground,
           display: 'flex',
           alignItems: 'center',
           gap: 0.75,
-          borderRadius: '0 0 8px 8px'
+          borderRadius: '0 0 8px 8px',
+          borderTop: '1px solid',
+          borderColor: footerBorderColor,
+          backdropFilter: 'blur(6px)'
         }}
       >
         {/* 延迟指标 */}
@@ -194,11 +188,20 @@ export default function NodePreviewCard({ node, onClick }) {
               width: 6,
               height: 6,
               borderRadius: '50%',
-              bgcolor: getStatusColor(delayDisplay.color),
+              bgcolor: getStatusColor(theme, delayDisplay.color),
               flexShrink: 0
             }}
           />
-          <Typography sx={{ color: '#fff', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap' }}>{delayDisplay.text}</Typography>
+          <Typography
+            sx={{
+              color: 'text.primary',
+              fontSize: 10,
+              fontWeight: 700,
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {delayDisplay.text}
+          </Typography>
         </Box>
 
         {/* 速度指标 */}
@@ -208,11 +211,20 @@ export default function NodePreviewCard({ node, onClick }) {
               width: 6,
               height: 6,
               borderRadius: '50%',
-              bgcolor: getStatusColor(speedDisplay.color),
+              bgcolor: getStatusColor(theme, speedDisplay.color),
               flexShrink: 0
             }}
           />
-          <Typography sx={{ color: '#fff', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap' }}>{speedDisplay.text}</Typography>
+          <Typography
+            sx={{
+              color: 'text.primary',
+              fontSize: 10,
+              fontWeight: 700,
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {speedDisplay.text}
+          </Typography>
         </Box>
 
         {/* 右侧填充 */}
@@ -222,7 +234,15 @@ export default function NodePreviewCard({ node, onClick }) {
         <Stack direction="row" alignItems="center" spacing={0.25} className="country-flag" sx={{ transition: 'all 0.3s ease' }}>
           <Typography sx={{ fontSize: 12, lineHeight: 1 }}>{node.CountryFlag || '🌐'}</Typography>
           {node.LinkCountry && (
-            <Typography sx={{ color: 'rgba(255,255,255,0.9)', fontSize: 8, fontWeight: 600 }}>{node.LinkCountry}</Typography>
+            <Typography
+              sx={{
+                color: 'text.secondary',
+                fontSize: 8,
+                fontWeight: 700
+              }}
+            >
+              {node.LinkCountry}
+            </Typography>
           )}
         </Stack>
       </Box>

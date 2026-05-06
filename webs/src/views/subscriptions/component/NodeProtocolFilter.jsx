@@ -12,7 +12,9 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import Alert from '@mui/material/Alert';
-import { useTheme } from '@mui/material/styles';
+import { alpha, useTheme } from '@mui/material/styles';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
+import { getProtocolOptions, getProtocolPresentation } from 'utils/protocolPresentation';
 
 // icons
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -21,51 +23,29 @@ import RouterIcon from '@mui/icons-material/Router';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import BlockIcon from '@mui/icons-material/Block';
 
-// 协议颜色映射
-const protocolColors = {
-  vmess: '#1976d2',
-  vless: '#7b1fa2',
-  trojan: '#d32f2f',
-  ss: '#2e7d32',
-  ssr: '#e64a19',
-  hysteria: '#f9a825',
-  hysteria2: '#ef6c00',
-  tuic: '#0277bd',
-  wireguard: '#88171a',
-  naiveproxy: '#5d4037',
-  anytls: '#20a84c',
-  socks5: '#116ea4',
-  socks: '#dd4984',
-  http: '#0288d1',
-  https: '#0277bd'
-};
-
-// 协议显示名称映射
-const protocolLabels = {
-  vmess: 'VMess',
-  vless: 'VLESS',
-  trojan: 'Trojan',
-  ss: 'SS',
-  ssr: 'SSR',
-  hysteria: 'Hysteria',
-  hysteria2: 'Hysteria2',
-  tuic: 'TUIC',
-  wireguard: 'WireGuard',
-  naiveproxy: 'NaiveProxy',
-  anytls: 'AnyTLS',
-  socks5: 'SOCKS5',
-  socks: 'SOCKS',
-  http: 'HTTP',
-  https: 'HTTPS'
-};
-
 /**
  * 节点协议过滤器
  * 用于订阅设置中按协议类型过滤节点（白名单/黑名单模式）
  */
 export default function NodeProtocolFilter({ protocolOptions, whitelistValue, blacklistValue, onWhitelistChange, onBlacklistChange }) {
   const theme = useTheme();
+  const { isDark } = useResolvedColorScheme();
   const [expanded, setExpanded] = useState(false);
+  const getOptionChipSx = (color, fallbackColor) => {
+    const resolvedColor = color || fallbackColor;
+    return {
+      bgcolor: alpha(resolvedColor, isDark ? 0.18 : 0.1),
+      color: resolvedColor,
+      border: '1px solid',
+      borderColor: alpha(resolvedColor, isDark ? 0.34 : 0.18),
+      '& .MuiChip-deleteIcon': {
+        color: alpha(resolvedColor, 0.72),
+        '&:hover': {
+          color: resolvedColor
+        }
+      }
+    };
+  };
 
   // 解析逗号分隔的协议字符串为数组
   const parseProtocolString = (str) => {
@@ -85,18 +65,8 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
   const blacklistProtocols = parseProtocolString(blacklistValue);
   const hasAnyRules = whitelistProtocols.length > 0 || blacklistProtocols.length > 0;
 
-  // 获取协议选项（确保有颜色和显示名称）
-  const getProtocolOption = (protocol) => {
-    const p = protocol.toLowerCase();
-    return {
-      value: p,
-      label: protocolLabels[p] || p.toUpperCase(),
-      color: protocolColors[p] || '#757575'
-    };
-  };
-
   // 构建选项列表
-  const options = (protocolOptions || []).map((p) => getProtocolOption(p));
+  const options = getProtocolOptions(protocolOptions);
 
   return (
     <Paper
@@ -116,7 +86,9 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          background: `linear-gradient(145deg, ${theme.palette.mode === 'dark' ? '#1a2027' : '#f5f5f5'} 0%, ${theme.palette.mode === 'dark' ? '#121417' : '#fafafa'} 100%)`,
+          bgcolor: 'background.default',
+          borderBottom: '1px solid',
+          borderColor: 'divider',
           cursor: 'pointer',
           '&:hover': {
             bgcolor: 'action.hover'
@@ -130,7 +102,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
             协议类型过滤
           </Typography>
           {hasAnyRules && (
-            <Typography variant="caption" color="textSecondary">
+            <Typography variant="caption" color="text.secondary">
               (白名单 {whitelistProtocols.length} / 黑名单 {blacklistProtocols.length} 个协议)
             </Typography>
           )}
@@ -161,7 +133,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
               multiple
               options={options}
               getOptionLabel={(option) => option.label || option}
-              value={whitelistProtocols.map(getProtocolOption)}
+              value={whitelistProtocols.map((protocol) => getProtocolPresentation(protocol))}
               onChange={(e, newValue) => onWhitelistChange(toProtocolString(newValue.map((v) => v.value || v)))}
               isOptionEqualToValue={(option, value) => (option.value || option) === (value.value || value)}
               filterSelectedOptions
@@ -173,11 +145,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
                       key={key}
                       label={option.label || option}
                       size="small"
-                      sx={{
-                        backgroundColor: option.color || '#4caf50',
-                        color: '#fff',
-                        '& .MuiChip-deleteIcon': { color: 'rgba(255,255,255,0.7)' }
-                      }}
+                      sx={getOptionChipSx(option.color, theme.palette.success.main)}
                       {...tagProps}
                     />
                   );
@@ -190,7 +158,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
                       width: 12,
                       height: 12,
                       borderRadius: '50%',
-                      backgroundColor: option.color || '#1976d2',
+                      backgroundColor: option.color || theme.palette.primary.main,
                       mr: 1
                     }}
                   />
@@ -199,7 +167,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
               )}
               renderInput={(params) => <TextField {...params} placeholder="选择白名单协议（只保留这些协议的节点）" size="small" />}
             />
-            <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
               仅保留使用白名单协议的节点
             </Typography>
           </Box>
@@ -218,7 +186,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
               multiple
               options={options}
               getOptionLabel={(option) => option.label || option}
-              value={blacklistProtocols.map(getProtocolOption)}
+              value={blacklistProtocols.map((protocol) => getProtocolPresentation(protocol))}
               onChange={(e, newValue) => onBlacklistChange(toProtocolString(newValue.map((v) => v.value || v)))}
               isOptionEqualToValue={(option, value) => (option.value || option) === (value.value || value)}
               filterSelectedOptions
@@ -230,11 +198,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
                       key={key}
                       label={option.label || option}
                       size="small"
-                      sx={{
-                        backgroundColor: option.color || '#f44336',
-                        color: '#fff',
-                        '& .MuiChip-deleteIcon': { color: 'rgba(255,255,255,0.7)' }
-                      }}
+                      sx={getOptionChipSx(option.color, theme.palette.error.main)}
                       {...tagProps}
                     />
                   );
@@ -247,7 +211,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
                       width: 12,
                       height: 12,
                       borderRadius: '50%',
-                      backgroundColor: option.color || '#1976d2',
+                      backgroundColor: option.color || theme.palette.primary.main,
                       mr: 1
                     }}
                   />
@@ -256,7 +220,7 @@ export default function NodeProtocolFilter({ protocolOptions, whitelistValue, bl
               )}
               renderInput={(params) => <TextField {...params} placeholder="选择黑名单协议（排除这些协议的节点）" size="small" />}
             />
-            <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: 'block' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
               使用黑名单协议的节点将被排除
             </Typography>
           </Box>

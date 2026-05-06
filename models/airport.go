@@ -1,32 +1,86 @@
 package models
 
 import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"sublink/cache"
 	"sublink/database"
 	"sublink/utils"
 	"time"
+
+	"gorm.io/gorm"
 )
+
+type AirportRequestHeader struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type AirportRequestHeaders []AirportRequestHeader
+
+func (h AirportRequestHeaders) Value() (driver.Value, error) {
+	if len(h) == 0 {
+		return "[]", nil
+	}
+	data, err := json.Marshal(h)
+	if err != nil {
+		return nil, err
+	}
+	return string(data), nil
+}
+
+func (h *AirportRequestHeaders) Scan(value interface{}) error {
+	if value == nil {
+		*h = AirportRequestHeaders{}
+		return nil
+	}
+
+	var raw []byte
+	switch v := value.(type) {
+	case []byte:
+		raw = v
+	case string:
+		raw = []byte(v)
+	default:
+		return fmt.Errorf("unsupported request headers type: %T", value)
+	}
+
+	if len(raw) == 0 {
+		*h = AirportRequestHeaders{}
+		return nil
+	}
+
+	var parsed AirportRequestHeaders
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return err
+	}
+	*h = parsed
+	return nil
+
+}
 
 // Airport 机场模型
 // 用于管理外部订阅源，支持定时拉取更新
 type Airport struct {
-	ID                int        `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name              string     `json:"name"`                                   // 机场名称（唯一）
-	URL               string     `json:"url"`                                    // 订阅地址
-	CronExpr          string     `json:"cronExpr"`                               // 定时更新Cron表达式
-	Enabled           bool       `json:"enabled"`                                // 是否启用
-	SuccessCount      int        `gorm:"default:0" json:"successCount"`          // 成功拉取次数
-	LastRunTime       *time.Time `gorm:"type:datetime" json:"lastRunTime"`       // 上次运行时间
-	NextRunTime       *time.Time `gorm:"type:datetime" json:"nextRunTime"`       // 下次运行时间
-	CreatedAt         time.Time  `gorm:"autoCreateTime" json:"createdAt"`        // 创建时间
-	UpdatedAt         time.Time  `gorm:"autoUpdateTime" json:"updatedAt"`        // 更新时间
-	Group             string     `json:"group"`                                  // 导入节点的默认分组
-	DownloadWithProxy bool       `gorm:"default:false" json:"downloadWithProxy"` // 是否使用代理下载
-	ProxyLink         string     `gorm:"default:''" json:"proxyLink"`            // 代理节点链接
-	UserAgent         string     `json:"userAgent"`                              // 自定义User-Agent
-	NodeCount         int        `gorm:"-" json:"nodeCount"`                     // 节点数量（非数据库字段）
+	ID                int                   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name              string                `json:"name"`                                   // 机场名称（唯一）
+	URL               string                `json:"url"`                                    // 订阅地址
+	CronExpr          string                `json:"cronExpr"`                               // 定时更新Cron表达式
+	Enabled           bool                  `json:"enabled"`                                // 是否启用
+	SuccessCount      int                   `gorm:"default:0" json:"successCount"`          // 成功拉取次数
+	LastRunTime       *time.Time            `json:"lastRunTime"`                            // 上次运行时间
+	NextRunTime       *time.Time            `json:"nextRunTime"`                            // 下次运行时间
+	CreatedAt         time.Time             `gorm:"autoCreateTime" json:"createdAt"`        // 创建时间
+	UpdatedAt         time.Time             `gorm:"autoUpdateTime" json:"updatedAt"`        // 更新时间
+	Group             string                `json:"group"`                                  // 导入节点的默认分组
+	DownloadWithProxy bool                  `gorm:"default:false" json:"downloadWithProxy"` // 是否使用代理下载
+	ProxyLink         string                `gorm:"type:text" json:"proxyLink"`             // 代理节点链接
+	UserAgent         string                `json:"userAgent"`                              // 自定义User-Agent
+	RequestHeaders    AirportRequestHeaders `gorm:"type:text" json:"requestHeaders"`        // 自定义请求头
+	NodeCount         int                   `gorm:"-" json:"nodeCount"`                     // 节点数量（非数据库字段）
 	// 用量信息相关字段
 	FetchUsageInfo bool   `gorm:"default:false" json:"fetchUsageInfo"` // 是否获取用量信息
 	UsageUpload    int64  `gorm:"default:0" json:"usageUpload"`        // 已上传流量（字节）
@@ -94,6 +148,7 @@ func (a *Airport) Update() error {
 	err := database.DB.Model(a).Select(
 		"Name", "URL", "CronExpr", "Enabled", "LastRunTime", "NextRunTime",
 		"SuccessCount", "Group", "DownloadWithProxy", "ProxyLink", "UserAgent",
+		"RequestHeaders",
 		"FetchUsageInfo", "SkipTLSVerify", "Remark", "Logo",
 		"NodeNameWhitelist", "NodeNameBlacklist", "ProtocolWhitelist", "ProtocolBlacklist", "NodeNamePreprocess",
 		"DeduplicationRule", "NodeNameUniquify", "NodeNamePrefix",
@@ -288,6 +343,94 @@ func ListNodesByAirportID(airportID int) ([]Node, error) {
 // UpdateNodesByAirportID 更新机场关联节点的来源名称和分组
 func UpdateNodesByAirportID(airportID int, name string, group string) error {
 	return UpdateNodesBySourceID(airportID, name, group)
+}
+
+// AirportBatchUpdateParams 机场批量更新参数
+type AirportBatchUpdateParams struct {
+	ApplyGroup    bool
+	Group         string
+	ApplySchedule bool
+	CronExpr      string
+}
+
+// BatchUpdateAirports 批量更新机场的分组和调度配置
+func BatchUpdateAirports(ids []int, params AirportBatchUpdateParams) ([]Airport, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	uniqueIDs := make([]int, 0, len(ids))
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) == 0 {
+		return nil, nil
+	}
+
+	var airports []Airport
+	err := database.WithTransaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id IN ?", uniqueIDs).Order("id ASC").Find(&airports).Error; err != nil {
+			return err
+		}
+		if len(airports) != len(uniqueIDs) {
+			return fmt.Errorf("部分机场不存在或已被删除")
+		}
+
+		for _, airport := range airports {
+			updates := make(map[string]interface{})
+			if params.ApplyGroup {
+				updates["group"] = params.Group
+			}
+			if params.ApplySchedule {
+				updates["cron_expr"] = params.CronExpr
+			}
+			if len(updates) > 0 {
+				if err := tx.Model(&Airport{}).Where("id = ?", airport.ID).Updates(updates).Error; err != nil {
+					return err
+				}
+			}
+
+			if params.ApplyGroup {
+				if err := tx.Model(&Node{}).Where("source_id = ?", airport.ID).Update("group", params.Group).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	updatedAirports := make([]Airport, 0, len(uniqueIDs))
+	for _, id := range uniqueIDs {
+		var refreshed Airport
+		if err := database.DB.Where("id = ?", id).First(&refreshed).Error; err != nil {
+			return nil, err
+		}
+		airportCache.Set(refreshed.ID, refreshed)
+
+		if params.ApplyGroup {
+			nodesToUpdate := nodeCache.GetByIndex("sourceID", strconv.Itoa(refreshed.ID))
+			for _, n := range nodesToUpdate {
+				n.Group = refreshed.Group
+				nodeCache.Set(n.ID, n)
+			}
+		}
+
+		updatedAirports = append(updatedAirports, refreshed)
+	}
+
+	return updatedAirports, nil
 }
 
 // UpdateUsageInfo 更新用量信息 (Write-Through)

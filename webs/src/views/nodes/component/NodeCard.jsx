@@ -8,12 +8,23 @@ import Chip from '@mui/material/Chip';
 import Stack from '@mui/material/Stack';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
 
 // project imports
 import MainCard from 'ui-component/cards/MainCard';
 
 // utils
-import { getDelayDisplay, getSpeedDisplay, formatCountry } from '../utils';
+import {
+  getDelayDisplay,
+  getFraudScoreDisplay,
+  getIpTypeDisplay,
+  getNodeUnlockSummaryDisplay,
+  getQualityStatusDisplay,
+  getResidentialDisplay,
+  getSpeedDisplay,
+  formatCountry
+} from '../utils';
+import { getNodePanelSx, getNodeTagChipSx, getNodeThemeTokens } from '../nodeTheme';
 
 /**
  * 移动端节点卡片组件（精简版）
@@ -21,6 +32,9 @@ import { getDelayDisplay, getSpeedDisplay, formatCountry } from '../utils';
  */
 export default function NodeCard({ node, isSelected, tagColorMap, onSelect, onViewDetails }) {
   const theme = useTheme();
+  const { isDark } = useResolvedColorScheme();
+  const tokens = getNodeThemeTokens(theme, isDark);
+  const unlockDisplay = getNodeUnlockSummaryDisplay(node, { limit: 2 });
 
   return (
     <MainCard
@@ -28,12 +42,11 @@ export default function NodeCard({ node, isSelected, tagColorMap, onSelect, onVi
       border
       shadow={theme.shadows[1]}
       sx={{
-        cursor: 'pointer',
-        transition: 'all 0.2s ease',
-        '&:hover': {
-          boxShadow: theme.shadows[4],
-          transform: 'translateY(-2px)'
-        }
+        ...getNodePanelSx(theme, tokens, tokens.palette.primary.main, {
+          interactive: true,
+          selected: isSelected
+        }),
+        cursor: 'pointer'
       }}
       onClick={(e) => {
         // 点击复选框时不触发详情
@@ -42,9 +55,16 @@ export default function NodeCard({ node, isSelected, tagColorMap, onSelect, onVi
       }}
     >
       <Box p={2}>
-        {/* 头部: 勾选框 + 名称 + 延迟 */}
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={1.5}>
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
+        <Box sx={{ position: 'relative', mb: 1.5, pr: 10 }}>
+          <Box sx={{ position: 'absolute', top: 0, right: 0 }}>
+            <Chip
+              label={node.LinkCountry ? formatCountry(node.LinkCountry) : '🏳️ 未知'}
+              color={node.LinkCountry ? 'secondary' : 'default'}
+              variant="outlined"
+              size="small"
+            />
+          </Box>
+          <Stack direction="row" alignItems="flex-start" sx={{ minWidth: 0 }}>
             <Checkbox
               checked={isSelected}
               onChange={(e) => {
@@ -58,25 +78,20 @@ export default function NodeCard({ node, isSelected, tagColorMap, onSelect, onVi
                 variant="subtitle1"
                 fontWeight="bold"
                 sx={{
+                  flex: 1,
+                  minWidth: 0,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  maxWidth: '180px'
+                  pr: 1
                 }}
               >
                 {node.Name}
               </Typography>
             </Tooltip>
           </Stack>
-          <Box sx={{ flexShrink: 0, ml: 1 }}>
-            {(() => {
-              const d = getDelayDisplay(node.DelayTime, node.DelayStatus);
-              return <Chip label={d.label} color={d.color} variant={d.variant} size="small" />;
-            })()}
-          </Box>
-        </Stack>
+        </Box>
 
-        {/* 信息区: 分组 + 来源 + 速度 + 国家 */}
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
           {node.Group && (
             <Tooltip title={`分组: ${node.Group}`}>
@@ -102,6 +117,21 @@ export default function NodeCard({ node, isSelected, tagColorMap, onSelect, onVi
               />
             </Tooltip>
           )}
+        </Stack>
+
+        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+          {(() => {
+            const d = getDelayDisplay(node.DelayTime, node.DelayStatus);
+            return (
+              <Chip
+                icon={<span style={{ fontSize: '12px', marginLeft: '8px' }}>⏱️</span>}
+                label={d.label}
+                color={d.color}
+                variant={d.variant}
+                size="small"
+              />
+            );
+          })()}
           {(() => {
             const s = getSpeedDisplay(node.Speed, node.SpeedStatus);
             return (
@@ -114,8 +144,90 @@ export default function NodeCard({ node, isSelected, tagColorMap, onSelect, onVi
               />
             );
           })()}
-          {node.LinkCountry && <Chip label={formatCountry(node.LinkCountry)} color="secondary" variant="outlined" size="small" />}
         </Stack>
+
+        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+          {(() => {
+            const ipTypeDisplay = getIpTypeDisplay(node.IsBroadcast, node.QualityStatus, node.QualityFamily);
+            const residentialDisplay = getResidentialDisplay(node.IsResidential, node.QualityStatus, node.QualityFamily);
+            const fraudScoreDisplay = getFraudScoreDisplay(node.FraudScore, node.QualityStatus, node.QualityFamily);
+            const qualityStatusDisplay = getQualityStatusDisplay(node.QualityStatus, node.QualityFamily);
+            const isUntested =
+              ipTypeDisplay.label === '未检测' && residentialDisplay.label === '未检测' && fraudScoreDisplay.label === '未检测';
+            const shouldMergeQualityTags =
+              node.QualityStatus !== 'success' &&
+              ipTypeDisplay.label === residentialDisplay.label &&
+              residentialDisplay.label === fraudScoreDisplay.label;
+
+            if (isUntested) {
+              return <Chip label="未检测" color="default" variant="outlined" size="small" />;
+            }
+
+            if (shouldMergeQualityTags) {
+              const mergedChip = (
+                <Chip
+                  label={qualityStatusDisplay.label}
+                  color={qualityStatusDisplay.color}
+                  variant={qualityStatusDisplay.variant}
+                  size="small"
+                />
+              );
+              return qualityStatusDisplay.tooltip ? <Tooltip title={qualityStatusDisplay.tooltip}>{mergedChip}</Tooltip> : mergedChip;
+            }
+
+            const ipTypeChip = (
+              <Chip label={ipTypeDisplay.label} color={ipTypeDisplay.color} variant={ipTypeDisplay.variant} size="small" />
+            );
+            const residentialChip = (
+              <Chip label={residentialDisplay.label} color={residentialDisplay.color} variant={residentialDisplay.variant} size="small" />
+            );
+            const fraudChip = (
+              <Chip
+                label={node.QualityStatus === 'success' ? `评分 ${fraudScoreDisplay.label}` : fraudScoreDisplay.label}
+                color={fraudScoreDisplay.color}
+                variant={fraudScoreDisplay.variant}
+                size="small"
+                sx={fraudScoreDisplay.sx}
+              />
+            );
+
+            return (
+              <>
+                {ipTypeDisplay.tooltip ? <Tooltip title={ipTypeDisplay.tooltip}>{ipTypeChip}</Tooltip> : ipTypeChip}
+                {residentialDisplay.tooltip ? <Tooltip title={residentialDisplay.tooltip}>{residentialChip}</Tooltip> : residentialChip}
+                {fraudScoreDisplay.tooltip ? <Tooltip title={fraudScoreDisplay.tooltip}>{fraudChip}</Tooltip> : fraudChip}
+              </>
+            );
+          })()}
+        </Stack>
+
+        {unlockDisplay?.compactItems?.length > 0 && (
+          <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+            {unlockDisplay.compactItems.map((item) => {
+              const chip = (
+                <Chip
+                  key={`unlock-${item.provider}`}
+                  icon={<span style={{ fontSize: '12px', marginLeft: '8px' }}>🔓</span>}
+                  label={item.compactLabel}
+                  color={item.color}
+                  variant={item.variant}
+                  size="small"
+                />
+              );
+
+              return item.tooltip ? (
+                <Tooltip key={`unlock-tip-${item.provider}`} title={item.tooltip}>
+                  {chip}
+                </Tooltip>
+              ) : (
+                chip
+              );
+            })}
+            {unlockDisplay.extraCount > 0 && (
+              <Chip label={`+${unlockDisplay.extraCount}`} color="default" variant="outlined" size="small" />
+            )}
+          </Stack>
+        )}
 
         {/* 标签区 */}
         {node.Tags && (
@@ -124,18 +236,13 @@ export default function NodeCard({ node, isSelected, tagColorMap, onSelect, onVi
               .filter((t) => t.trim())
               .map((tag, idx) => {
                 const tagName = tag.trim();
-                const tagColor = tagColorMap?.[tagName] || '#1976d2';
+                const tagColor = tagColorMap?.[tagName] || tokens.palette.primary.main;
                 return (
                   <Chip
                     key={`tag-${idx}`}
                     label={tagName}
                     size="small"
-                    sx={{
-                      fontSize: '10px',
-                      height: 20,
-                      backgroundColor: tagColor,
-                      color: '#fff'
-                    }}
+                    sx={{ fontSize: '10px', height: 20, ...getNodeTagChipSx(theme, tokens, tagColor) }}
                   />
                 );
               })}
@@ -173,6 +280,9 @@ NodeCard.propTypes = {
     SpeedStatus: PropTypes.number,
     DialerProxyName: PropTypes.string,
     LinkCountry: PropTypes.string,
+    IsBroadcast: PropTypes.bool,
+    IsResidential: PropTypes.bool,
+    FraudScore: PropTypes.number,
     LandingIP: PropTypes.string,
     CreatedAt: PropTypes.string,
     UpdatedAt: PropTypes.string,

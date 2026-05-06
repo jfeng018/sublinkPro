@@ -29,10 +29,22 @@ import {
   copySubscription,
   previewSubscriptionNodes
 } from 'api/subscriptions';
-import { getNodes, getNodeCountries, getNodeGroups, getNodeSources, getNodeProtocols } from 'api/nodes';
+import { getNodeCheckMeta } from 'api/nodeCheck';
+import {
+  getNodeSelector,
+  getNodeSelectorByIds,
+  getNodeGroupStats,
+  getNodeCountries,
+  getNodeGroups,
+  getNodeSources,
+  getNodeIds,
+  getProtocolUIMeta
+} from 'api/nodes';
 import { getTemplates } from 'api/templates';
 import { getScripts } from 'api/scripts';
 import { getTags } from 'api/tags';
+import { buildUnlockRulesPayload, normalizeUnlockRules, setUnlockMeta } from 'views/nodes/utils';
+import { getRegisteredProtocolNames } from 'utils/protocolPresentation';
 
 // components
 import {
@@ -60,7 +72,6 @@ export default function SubscriptionList() {
   const showPreview = isFeatureEnabled('SubNodePreview');
 
   const [subscriptions, setSubscriptions] = useState([]);
-  const [allNodes, setAllNodes] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [scripts, setScripts] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -122,6 +133,17 @@ export default function SubscriptionList() {
     protocolBlacklist: '',
     protocolOptions: [],
     deduplicationRule: '',
+    MaxFraudScore: 0,
+    OnlyResidential: false,
+    OnlyNative: false,
+    ResidentialType: '',
+    IPType: '',
+    QualityStatus: '',
+    UnlockProvider: '',
+    UnlockStatus: '',
+    UnlockKeyword: '',
+    UnlockRuleMode: 'or',
+    unlockRules: [],
     refreshUsageOnRequest: true // 默认开启实时获取用量信息
   });
 
@@ -160,6 +182,13 @@ export default function SubscriptionList() {
   const [selectedNodeSearch, setSelectedNodeSearch] = useState('');
   const [namingMode, setNamingMode] = useState('builder');
 
+  const [availableNodes, setAvailableNodes] = useState([]);
+  const [availableNodesTotal, setAvailableNodesTotal] = useState(0);
+  const [availableNodesLoading, setAvailableNodesLoading] = useState(false);
+  const [selectedNodeMap, setSelectedNodeMap] = useState({});
+  const [groupNodeCounts, setGroupNodeCounts] = useState({});
+  const [allNodeTotal, setAllNodeTotal] = useState(0);
+
   // 预览状态
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -180,6 +209,92 @@ export default function SubscriptionList() {
   const [sourceOptions, setSourceOptions] = useState([]);
   const [tagOptions, setTagOptions] = useState([]);
   const [protocolOptions, setProtocolOptions] = useState([]);
+
+  const buildNodeFilterParams = useCallback(
+    () => ({
+      search: nodeSearchQuery,
+      group: nodeGroupFilter === 'all' ? '' : nodeGroupFilter,
+      source: nodeSourceFilter === 'all' ? '' : nodeSourceFilter,
+      'countries[]': nodeCountryFilter,
+      'excludeIds[]': formData.selectedNodes
+    }),
+    [formData.selectedNodes, nodeCountryFilter, nodeGroupFilter, nodeSearchQuery, nodeSourceFilter]
+  );
+
+  const buildSelectorParams = useCallback(
+    () => ({
+      ...buildNodeFilterParams(),
+      page: 1,
+      pageSize: 100
+    }),
+    [buildNodeFilterParams]
+  );
+
+  const hydrateSelectedNodeMap = useCallback((items) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    setSelectedNodeMap((prev) => {
+      const next = { ...prev };
+      items.forEach((item) => {
+        next[item.ID] = item;
+      });
+      return next;
+    });
+  }, []);
+
+  const fetchNodeSelector = useCallback(async () => {
+    setAvailableNodesLoading(true);
+    try {
+      const response = await getNodeSelector(buildSelectorParams());
+      const items = response.data?.items || [];
+      setAvailableNodes(items);
+      setAvailableNodesTotal(response.data?.total || items.length);
+      hydrateSelectedNodeMap(items);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setAvailableNodesLoading(false);
+    }
+  }, [buildSelectorParams, hydrateSelectedNodeMap]);
+
+  const refreshNodeSelector = useCallback(() => {
+    if (!dialogOpen || formData.selectionMode === 'groups') return;
+    void fetchNodeSelector();
+  }, [dialogOpen, fetchNodeSelector, formData.selectionMode]);
+
+  const fetchSelectedNodeDetails = useCallback(
+    async (ids) => {
+      const validIds = Array.from(new Set((ids || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
+      if (validIds.length === 0) return;
+      const missingIds = validIds.filter((id) => !selectedNodeMap[id]);
+      if (missingIds.length === 0) return;
+      try {
+        const response = await getNodeSelectorByIds({ 'ids[]': missingIds });
+        hydrateSelectedNodeMap(response.data || []);
+      } catch (error) {
+        console.error(error);
+      }
+    },
+    [hydrateSelectedNodeMap, selectedNodeMap]
+  );
+
+  const syncSelectedNodeMapFromList = useCallback((nodes) => {
+    if (!Array.isArray(nodes) || nodes.length === 0) return;
+    setSelectedNodeMap((prev) => {
+      const next = { ...prev };
+      nodes.forEach((node) => {
+        next[node.ID] = {
+          ID: node.ID,
+          Name: node.Name,
+          Group: node.Group,
+          Source: node.Source,
+          LinkCountry: node.LinkCountry,
+          UnlockSummary: node.UnlockSummary,
+          UnlockCheckAt: node.UnlockCheckAt
+        };
+      });
+      return next;
+    });
+  }, []);
 
   // 获取订阅列表（分页）
   const fetchSubscriptions = async (currentPage, currentPageSize) => {
@@ -203,27 +318,32 @@ export default function SubscriptionList() {
     }
   };
 
-  // 获取其他数据（不分页）
+  // 获取其他数据（分层加载）
   const fetchOtherData = useCallback(async () => {
     try {
-      const [nodesRes, templatesRes, scriptsRes, countriesRes, groupsRes, sourcesRes, tagsRes, protocolsRes] = await Promise.all([
-        getNodes(),
-        getTemplates(),
-        getScripts(),
-        getNodeCountries(),
-        getNodeGroups(),
-        getNodeSources(),
-        getTags(),
-        getNodeProtocols()
-      ]);
-      setAllNodes(nodesRes.data || []);
+      const [templatesRes, scriptsRes, countriesRes, groupsRes, sourcesRes, tagsRes, protocolMetaRes, nodeCheckMetaRes, groupStatsRes] =
+        await Promise.all([
+          getTemplates(),
+          getScripts(),
+          getNodeCountries(),
+          getNodeGroups(),
+          getNodeSources(),
+          getTags(),
+          getProtocolUIMeta(),
+          getNodeCheckMeta(),
+          getNodeGroupStats()
+        ]);
       setTemplates(templatesRes.data || []);
       setScripts(scriptsRes.data || []);
       setCountryOptions(countriesRes.data || []);
       setGroupOptions((groupsRes.data || []).sort());
       setSourceOptions((sourcesRes.data || []).sort());
       setTagOptions(tagsRes.data || []);
-      setProtocolOptions(protocolsRes.data || []);
+      setProtocolOptions(getRegisteredProtocolNames(protocolMetaRes.data || []));
+      setUnlockMeta(nodeCheckMetaRes.data || {});
+      const counts = groupStatsRes.data || {};
+      setGroupNodeCounts(counts);
+      setAllNodeTotal(Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0));
     } catch (error) {
       console.error(error);
     }
@@ -234,6 +354,10 @@ export default function SubscriptionList() {
     fetchSubscriptions(0, rowsPerPage);
     fetchOtherData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    refreshNodeSelector();
+  }, [refreshNodeSelector, nodeGroupFilter, nodeSourceFilter, nodeSearchQuery, nodeCountryFilter, formData.selectedNodes]);
 
   const showMessage = (message, severity = 'success') => {
     setSnackbar({ open: true, message, severity });
@@ -300,19 +424,42 @@ export default function SubscriptionList() {
       protocolBlacklist: '',
       protocolOptions: protocolOptions,
       deduplicationRule: '',
+      MaxFraudScore: 0,
+      OnlyResidential: false,
+      OnlyNative: false,
+      ResidentialType: '',
+      IPType: '',
+      QualityStatus: '',
+      UnlockProvider: '',
+      UnlockStatus: '',
+      UnlockKeyword: '',
+      UnlockRuleMode: 'or',
+      unlockRules: [],
       refreshUsageOnRequest: true
     });
     setNodeGroupFilter('all');
     setNodeSourceFilter('all');
     setNodeSearchQuery('');
     setNodeCountryFilter([]);
+    setAvailableNodes([]);
+    setAvailableNodesTotal(0);
+    setSelectedNodeMap({});
     setDialogOpen(true);
+    refreshNodeSelector();
   };
 
   const handleEdit = (sub) => {
     setIsEdit(true);
     setCurrentSub(sub);
     const config = typeof sub.Config === 'string' ? JSON.parse(sub.Config) : sub.Config;
+    const parsedUnlockRules = (() => {
+      if (!sub.UnlockRules) return [];
+      try {
+        return normalizeUnlockRules(typeof sub.UnlockRules === 'string' ? JSON.parse(sub.UnlockRules) : sub.UnlockRules);
+      } catch {
+        return [];
+      }
+    })();
 
     const nodes = sub.Nodes?.map((n) => n.ID) || [];
     const groups = (sub.Groups || []).map((g) => (typeof g === 'string' ? g : g.Name));
@@ -352,13 +499,31 @@ export default function SubscriptionList() {
       protocolBlacklist: sub.ProtocolBlacklist || '',
       protocolOptions: protocolOptions,
       deduplicationRule: sub.DeduplicationRule || '',
+      MaxFraudScore: sub.MaxFraudScore || 0,
+      OnlyResidential: sub.OnlyResidential || false,
+      OnlyNative: sub.OnlyNative || false,
+      ResidentialType: sub.ResidentialType || (sub.OnlyResidential ? 'residential' : ''),
+      IPType: sub.IPType || (sub.OnlyNative ? 'native' : ''),
+      QualityStatus: sub.QualityStatus || '',
+      UnlockProvider: sub.UnlockProvider || '',
+      UnlockStatus: sub.UnlockStatus || '',
+      UnlockKeyword: sub.UnlockKeyword || '',
+      UnlockRuleMode: sub.UnlockRuleMode || 'or',
+      unlockRules:
+        parsedUnlockRules.length > 0
+          ? parsedUnlockRules
+          : sub.UnlockProvider || sub.UnlockStatus || sub.UnlockKeyword
+            ? [{ provider: sub.UnlockProvider || '', status: sub.UnlockStatus || '', keyword: sub.UnlockKeyword || '' }]
+            : [],
       refreshUsageOnRequest: sub.RefreshUsageOnRequest !== false // 默认 true
     });
     setNodeGroupFilter('all');
     setNodeSourceFilter('all');
     setNodeSearchQuery('');
     setNodeCountryFilter([]);
+    syncSelectedNodeMapFromList(sub.Nodes || []);
     setDialogOpen(true);
+    refreshNodeSelector();
   };
 
   const handleDelete = async (sub) => {
@@ -422,6 +587,17 @@ export default function SubscriptionList() {
         ProtocolWhitelist: formData.protocolWhitelist,
         ProtocolBlacklist: formData.protocolBlacklist,
         DeduplicationRule: formData.deduplicationRule || '',
+        MaxFraudScore: formData.MaxFraudScore,
+        OnlyResidential: formData.ResidentialType === 'residential',
+        OnlyNative: formData.IPType === 'native',
+        ResidentialType: formData.ResidentialType || '',
+        IPType: formData.IPType || '',
+        QualityStatus: formData.QualityStatus || '',
+        UnlockProvider: '',
+        UnlockStatus: '',
+        UnlockKeyword: '',
+        UnlockRuleMode: formData.UnlockRuleMode || 'or',
+        UnlockRules: buildUnlockRulesPayload(formData.unlockRules),
         RefreshUsageOnRequest: formData.refreshUsageOnRequest
       };
 
@@ -454,8 +630,11 @@ export default function SubscriptionList() {
 
   // 节点选择操作（使用 node.ID）
   const handleAddNode = (nodeId) => {
-    setFormData({ ...formData, selectedNodes: [...formData.selectedNodes, nodeId] });
+    if (formData.selectedNodes.includes(nodeId)) return;
+    const nextSelected = [...formData.selectedNodes, nodeId];
+    setFormData({ ...formData, selectedNodes: nextSelected });
     setCheckedAvailable(checkedAvailable.filter((id) => id !== nodeId));
+    void fetchSelectedNodeDetails(nextSelected);
   };
 
   const handleRemoveNode = (nodeId) => {
@@ -463,35 +642,24 @@ export default function SubscriptionList() {
     setCheckedSelected(checkedSelected.filter((id) => id !== nodeId));
   };
 
-  // 过滤后的节点
-  const filteredNodes = useMemo(() => {
-    return allNodes.filter((node) => {
-      if (nodeGroupFilter !== 'all' && node.Group !== nodeGroupFilter) return false;
-      if (nodeSourceFilter !== 'all' && node.Source !== nodeSourceFilter) return false;
-      if (nodeSearchQuery) {
-        const query = nodeSearchQuery.toLowerCase();
-        if (!node.Name?.toLowerCase().includes(query) && !node.Group?.toLowerCase().includes(query)) {
-          return false;
-        }
-      }
-      if (nodeCountryFilter.length > 0) {
-        if (!node.LinkCountry || !nodeCountryFilter.includes(node.LinkCountry)) {
-          return false;
-        }
-      }
-      return true;
-    });
-  }, [allNodes, nodeGroupFilter, nodeSourceFilter, nodeSearchQuery, nodeCountryFilter]);
+  const selectedNodesList = useMemo(() => {
+    return formData.selectedNodes.map((id) => selectedNodeMap[id]).filter(Boolean);
+  }, [formData.selectedNodes, selectedNodeMap]);
 
-  // 可选节点（使用 ID 过滤）
-  const availableNodes = useMemo(() => {
-    return filteredNodes.filter((node) => !formData.selectedNodes.includes(node.ID));
-  }, [filteredNodes, formData.selectedNodes]);
+  const availableNodeCount = availableNodesTotal || availableNodes.length;
 
-  const handleAddAllVisible = () => {
-    const newNodes = [...formData.selectedNodes, ...availableNodes.map((n) => n.ID)];
-    setFormData({ ...formData, selectedNodes: newNodes });
-    setCheckedAvailable([]);
+  const handleAddAllVisible = async () => {
+    try {
+      const response = await getNodeIds(buildNodeFilterParams());
+      const matchedIds = response.data || [];
+      const newNodes = Array.from(new Set([...formData.selectedNodes, ...matchedIds]));
+      setFormData({ ...formData, selectedNodes: newNodes });
+      setCheckedAvailable([]);
+      await fetchSelectedNodeDetails(newNodes);
+    } catch (error) {
+      console.error(error);
+      showMessage(error.message || '批量添加节点失败', 'error');
+    }
   };
 
   const handleRemoveAll = () => {
@@ -517,9 +685,10 @@ export default function SubscriptionList() {
   };
 
   const handleAddChecked = () => {
-    const newNodes = [...formData.selectedNodes, ...checkedAvailable];
+    const newNodes = Array.from(new Set([...formData.selectedNodes, ...checkedAvailable]));
     setFormData({ ...formData, selectedNodes: newNodes });
     setCheckedAvailable([]);
+    void fetchSelectedNodeDetails(newNodes);
   };
 
   const handleRemoveChecked = () => {
@@ -528,18 +697,19 @@ export default function SubscriptionList() {
     setCheckedSelected([]);
   };
 
-  const handleToggleAllAvailable = () => {
-    if (checkedAvailable.length === availableNodes.length) {
+  const handleToggleAllAvailable = async () => {
+    if (checkedAvailable.length === availableNodeCount && availableNodeCount > 0) {
       setCheckedAvailable([]);
-    } else {
-      setCheckedAvailable(availableNodes.map((n) => n.ID));
+      return;
+    }
+    try {
+      const response = await getNodeIds(buildNodeFilterParams());
+      setCheckedAvailable(response.data || []);
+    } catch (error) {
+      console.error(error);
+      showMessage(error.message || '批量选择节点失败', 'error');
     }
   };
-
-  // 已选节点列表（使用 ID 过滤）
-  const selectedNodesList = useMemo(() => {
-    return allNodes.filter((node) => formData.selectedNodes.includes(node.ID));
-  }, [allNodes, formData.selectedNodes]);
 
   const handleToggleAllSelected = () => {
     if (checkedSelected.length === selectedNodesList.length) {
@@ -568,6 +738,17 @@ export default function SubscriptionList() {
         ProtocolBlacklist: formData.protocolBlacklist || '',
         NodeNameWhitelist: formData.nodeNameWhitelist || '',
         NodeNameBlacklist: formData.nodeNameBlacklist || '',
+        MaxFraudScore: formData.MaxFraudScore || 0,
+        OnlyResidential: formData.ResidentialType === 'residential',
+        OnlyNative: formData.IPType === 'native',
+        ResidentialType: formData.ResidentialType || '',
+        IPType: formData.IPType || '',
+        QualityStatus: formData.QualityStatus || '',
+        UnlockProvider: '',
+        UnlockStatus: '',
+        UnlockKeyword: '',
+        UnlockRuleMode: formData.UnlockRuleMode || 'or',
+        UnlockRules: buildUnlockRulesPayload(formData.unlockRules),
         NodeNamePreprocess: formData.nodeNamePreprocess || '',
         NodeNameRule: formData.nodeNameRule || '',
         DeduplicationRule: formData.deduplicationRule || ''
@@ -923,7 +1104,14 @@ export default function SubscriptionList() {
         setFormData={setFormData}
         templates={templates}
         scripts={scripts}
-        allNodes={allNodes}
+        selectorNodes={availableNodes}
+        selectorNodesTotal={availableNodeCount}
+        selectorNodesLoading={availableNodesLoading}
+        selectedNodesList={selectedNodesList}
+        selectedNodeSearch={selectedNodeSearch}
+        setSelectedNodeSearch={setSelectedNodeSearch}
+        groupNodeCounts={groupNodeCounts}
+        allNodeTotal={allNodeTotal}
         groupOptions={groupOptions}
         sourceOptions={sourceOptions}
         countryOptions={countryOptions}
@@ -940,8 +1128,6 @@ export default function SubscriptionList() {
         checkedSelected={checkedSelected}
         mobileTab={mobileTab}
         setMobileTab={setMobileTab}
-        selectedNodeSearch={selectedNodeSearch}
-        setSelectedNodeSearch={setSelectedNodeSearch}
         namingMode={namingMode}
         setNamingMode={setNamingMode}
         onClose={() => setDialogOpen(false)}

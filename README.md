@@ -43,7 +43,7 @@
 - 🎨 **前端框架**：基于 [Berry Free React Material UI Admin Template](https://github.com/codedthemes/berry-free-react-admin-template)
 - ⚡ **后端技术**：Go + Gin + Gorm
 - 🔐 **默认账号**：`admin` / `123456`（请安装后务必修改）
-- 💻 **演示系统**: [https://sublink-pro-demo.zeabur.app](https://sublink-pro-demo.zeabur.app/) 用户名：admin 密码：123456
+- 💻 **演示系统**: [https://demo.sublink.us.kg](https://demo.sublink.us.kg) 用户名：admin 密码：123456
 
 > [!WARNING]
 > ⚠️ 本项目和原项目数据库不兼容，请不要混用。
@@ -56,23 +56,31 @@
 
 | 功能 | 说明 | 详情 |
 |:---|:---|:---:|
-| 🏷️ **智能标签系统** | 自动规则打标签、零代码筛选、标签互斥组 | [📖](docs/features/tags.md) |
-| ⚡ **专业测速系统** | 双阶段测试、智能延迟测量、自动状态标记 | [📖](docs/features/speedtest.md) |
-| 🔗 **链式代理** | Dialer-Proxy 原生支持、可视化配置、拯救被墙节点 | [📖](docs/features/chain-proxy.md) |
+| 🏷️ **智能标签系统** | 自动规则打标签、零代码筛选、支持 IP 质量条件 | [📖](docs/features/tags.md) |
+| ⚡ **专业测速系统** | 双阶段测试、智能延迟测量、支持 IP 质量检测与解锁检测 | [📖](docs/features/speedtest.md) |
+| 🔗 **链式代理** | Dialer-Proxy 原生支持、可视化配置、支持按 IP 质量选节点 | [📖](docs/features/chain-proxy.md) |
+| 🤖 **AI 模板编辑** | 用自然语言生成模板候选草稿，支持编辑/对比双视图、本地应用与回退 | [📖](docs/features/template-ai.md) |
 | ✈️ **机场管理** | 多格式导入、定时更新、流量监控、一键全量拉取 | [📖](docs/features/airport.md) |
-| 🗂️ **分组排序** | 分组内机场优先级拖拽排序，控制订阅输出中的节点顺序 | - |
+| 🗂️ **分组排序** | 分组内机场优先级拖拽排序，控制订阅输出中的节点顺序 | [📖](docs/development.md) |
 | 📋 **订阅分享** | 多链接管理、过期策略、访问统计 | [📖](docs/features/subscription-share.md) |
 | 🌐 **Host 管理** | 域名映射、DNS 配置、CDN 优选 | [📖](docs/features/host.md) |
 | 🤖 **Telegram Bot** | 远程测速、订阅管理、系统监控 | [📖](docs/features/telegram-bot.md) |
 | 📜 **脚本系统** | 节点过滤、内容后处理、多脚本链式执行 | [📖](docs/script_support.md) |
-| 🔔 **Webhooks** | 支持 PushDeer、Bark、钉钉、方糖等多平台通知 | - |
-| 🔐 **安全特性** | Token 授权、API Key、IP 黑/白名单、访问日志 | - |
+| 🔔 **Webhooks** | 支持 PushDeer、Bark、钉钉、方糖等多平台通知 | [📖](docs/configuration.md) |
+| 🔐 **安全特性** | Token 授权、API Key、IP 黑/白名单、访问日志 | [📖](docs/configuration.md) |
 
 ---
 
 ## 🚀 快速开始
 
 ### Docker Compose（推荐）
+
+> [!IMPORTANT]
+> 运行时数据默认保存在以下目录中，请在升级和迁移时保留：
+>
+> - `./db`：数据库、配置文件、GeoIP 等本地数据
+> - `./template`：模板文件
+> - `./logs`：运行日志
 
 创建 `docker-compose.yml`：
 
@@ -98,8 +106,33 @@ docker-compose up -d
 
 访问 `http://localhost:8000`，使用默认账号 `admin` / `123456` 登录。
 
+默认使用 SQLite；如需切换到 MySQL 或 PostgreSQL，可通过 `SUBLINK_DSN`、配置文件 `dsn:` 或命令行 `--dsn` 指定数据库连接，示例见 [⚙️ 配置说明](docs/configuration.md)。
+
+> [!NOTE]
+> 即使配置了 `SUBLINK_WEB_BASE_PATH` 隐藏管理界面入口，API (`/api/*`) 与订阅/分享访问路径 (`/c/*`) 仍保持在根路径下，这是本项目特有的前后端集成行为。
+
 > [!TIP]
 > 更多安装方式（Docker、一键脚本、更新升级等）请参阅 [📦 安装部署指南](docs/installation.md)
+
+### 从 SQLite 迁移到 MySQL / PostgreSQL
+
+如果您早期使用的是 SQLite，现在希望迁移到 MySQL 或 PostgreSQL，建议按以下流程操作：
+
+1. 在旧的 SQLite 实例中登录后台，点击右上角头像菜单中的 **系统备份**，导出 `backup.zip`
+2. 在新实例中配置好 MySQL 或 PostgreSQL 的 `DSN`，并确保目标库是一个全新的空库
+3. 启动新实例后，进入 `设置 -> 数据迁移`
+4. 上传旧实例导出的 `backup.zip`
+5. 根据需要选择是否迁移 `AccessKey`、订阅访问日志，然后开始迁移
+6. 迁移完成后，**请手动重启项目实例**，再重新登录检查数据
+
+> [!IMPORTANT]
+> 推荐使用 `backup.zip` 迁移。直接上传 `.db` 只会迁移数据库记录，不会恢复模板目录。
+
+> [!NOTE]
+> 如果迁移了 `AccessKey`，请确保新旧实例使用相同的 `API 加密密钥`；否则旧 API Key 可能无法继续使用。
+
+> [!TIP]
+> 如果迁移完成后提示“有 N 条警告”，可以到 `任务中心` 打开对应的“数据库迁移”任务查看详细警告内容。
 
 ---
 
@@ -116,20 +149,24 @@ docker-compose up -d
 
 | 文档 | 说明 |
 |:---|:---|
-| [🏷️ 智能标签系统](docs/features/tags.md) | 自动规则打标签、零代码筛选、标签互斥组 |
-| [⚡ 测速系统](docs/features/speedtest.md) | 测速原理、参数配置、流量计算 |
-| [🔗 链式代理](docs/features/chain-proxy.md) | Dialer-Proxy、使用场景、配置流程 |
+| [🏷️ 智能标签系统](docs/features/tags.md) | 自动规则打标签、零代码筛选、IP 质量规则 |
+| [⚡ 测速系统](docs/features/speedtest.md) | 测速原理、IP 质量检测、解锁检测、参数配置 |
+| [🌍 解锁检测](docs/features/unlock-check.md) | 流媒体 / AI 可用区检测、Provider 架构、扩展方式 |
+| [🔗 链式代理](docs/features/chain-proxy.md) | Dialer-Proxy、条件选节点、配置流程 |
+| [🤖 AI 模板编辑](docs/features/template-ai.md) | AI 生成模板草稿、编辑/对比审阅、本地应用与回退 |
 | [✈️ 机场管理](docs/features/airport.md) | 订阅导入、定时更新、流量监控 |
 | [📋 订阅分享](docs/features/subscription-share.md) | 多链接管理、过期策略、访问统计 |
 | [🌐 Host 管理](docs/features/host.md) | 域名映射、DNS 配置、测速持久化 |
 | [🤖 Telegram 机器人](docs/features/telegram-bot.md) | 命令列表、配置指南 |
 | [📜 脚本功能](docs/script_support.md) | 节点过滤、内容后处理、函数参考 |
+| [🔐 双重验证（MFA）](docs/features/mfa.md) | TOTP 设置、恢复码、应急重置流程 |
 
 ### 👨‍💻 开发者
 
 | 文档 | 说明 |
 |:---|:---|
 | [🛠️ 开发指南](docs/development.md) | 项目结构、本地开发、定时任务开发 |
+| [🔌 协议扩展指南](docs/development.md#-新增协议接入指南) | 如何新增协议、注册能力、字段元数据、ProtocolDemo 示例 |
 
 ---
 

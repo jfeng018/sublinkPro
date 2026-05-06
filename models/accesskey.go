@@ -16,9 +16,9 @@ import (
 type AccessKey struct {
 	ID            int        `gorm:"primaryKey"`
 	UserID        int        `gorm:"not null;index"`
-	Username      string     `gorm:"not null;index"`
+	Username      string     `gorm:"size:100;not null;index"`
 	AccessKeyHash string     `gorm:"type:varchar(255);not null;uniqueIndex" json:"-"`
-	CreatedAt     time.Time  `gorm:""`
+	CreatedAt     time.Time  `gorm:"autoCreateTime"`
 	ExpiredAt     *time.Time `gorm:"index"`
 	Description   string     `gorm:"type:varchar(255)"`
 }

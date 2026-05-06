@@ -1,16 +1,14 @@
-/**
- * 科幻风格链式代理可视化画布
- * 基于 @xyflow/react 实现可缩放、拖拽、动态流动效果
- */
 import { useState, useMemo, useEffect, memo, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
+import { alpha, useTheme } from '@mui/material/styles';
 import { ReactFlow, Controls, MiniMap, useNodesState, useEdgesState, Handle, Position, getBezierPath } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './ChainCanvasView.css';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
 
 import PersonIcon from '@mui/icons-material/Person';
 import PublicIcon from '@mui/icons-material/Public';
@@ -24,6 +22,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import BlockIcon from '@mui/icons-material/Block';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import CloseIcon from '@mui/icons-material/Close';
+import { getChainProxyCanvasCssVars, getChainProxyThemeTokens } from './chainProxyTheme';
 
 // 国旗转换
 const getCountryFlag = (code) => {
@@ -45,14 +44,14 @@ const getTypeLabel = (type) => {
 };
 
 // 获取节点图标
-const getNodeIcon = (type) => {
+const getNodeIcon = (type, theme) => {
   const icons = {
-    template_group: <GroupWorkIcon sx={{ color: '#06b6d4', fontSize: 18 }} />,
-    custom_group: <DeviceHubIcon sx={{ color: '#8b5cf6', fontSize: 18 }} />,
-    dynamic_node: <AutoAwesomeIcon sx={{ color: '#eab308', fontSize: 18 }} />,
-    specified_node: <RouterIcon sx={{ color: '#06b6d4', fontSize: 18 }} />
+    template_group: <GroupWorkIcon sx={{ color: 'info.main', fontSize: 18 }} />,
+    custom_group: <DeviceHubIcon sx={{ color: 'secondary.main', fontSize: 18 }} />,
+    dynamic_node: <AutoAwesomeIcon sx={{ color: 'warning.main', fontSize: 18 }} />,
+    specified_node: <RouterIcon sx={{ color: 'success.main', fontSize: 18 }} />
   };
-  return icons[type] || <HubIcon sx={{ color: '#06b6d4', fontSize: 18 }} />;
+  return icons[type] || <HubIcon sx={{ color: theme.palette.info.main, fontSize: 18 }} />;
 };
 
 // 格式化延迟
@@ -69,23 +68,24 @@ const formatSpeed = (speed) => {
 };
 
 // 延迟颜色
-const getLatencyColor = (latency) => {
-  if (!latency || latency <= 0) return '#64748b';
-  if (latency < 100) return '#22c55e';
-  if (latency < 300) return '#eab308';
-  return '#ef4444';
+const getLatencyColor = (latency, theme) => {
+  if (!latency || latency <= 0) return theme.palette.text.secondary;
+  if (latency < 100) return theme.palette.success.main;
+  if (latency < 300) return theme.palette.warning.main;
+  return theme.palette.error.main;
 };
 
 // 速度颜色 - speed 单位是 MB/s
-const getSpeedColor = (speed) => {
-  if (!speed || speed <= 0) return '#64748b';
-  if (speed >= 10) return '#22c55e'; // >= 10 MB/s 绿色
-  if (speed >= 3) return '#eab308'; // >= 3 MB/s 黄色
-  return '#f97316'; // < 3 MB/s 橙色
+const getSpeedColor = (speed, theme) => {
+  if (!speed || speed <= 0) return theme.palette.text.secondary;
+  if (speed >= 10) return theme.palette.success.main;
+  if (speed >= 3) return theme.palette.warning.main;
+  return theme.palette.error.light;
 };
 
 // 详情弹窗组件 - 智能定位确保不超出屏幕
 const NodeDetailPanel = memo(({ data, position, onClose }) => {
+  const theme = useTheme();
   const hasNodes = data.nodes && data.nodes.length > 0;
   const panelRef = useState(null);
 
@@ -133,12 +133,12 @@ const NodeDetailPanel = memo(({ data, position, onClose }) => {
       onMouseDown={handleClick}
     >
       <div className="panel-header">
-        <div className="panel-icon">{getNodeIcon(data.type)}</div>
+        <div className="panel-icon">{getNodeIcon(data.type, theme)}</div>
         <div className="panel-title">
           <h4>{data.label || '未配置'}</h4>
           <span>{getTypeLabel(data.type)}</span>
         </div>
-        <IconButton size="small" onClick={onClose} sx={{ color: '#94a3b8' }}>
+        <IconButton size="small" onClick={onClose} sx={{ color: 'text.secondary' }}>
           <CloseIcon sx={{ fontSize: 16 }} />
         </IconButton>
       </div>
@@ -166,10 +166,10 @@ const NodeDetailPanel = memo(({ data, position, onClose }) => {
                     {node.name}
                   </span>
                 </span>
-                <span className="col-latency" style={{ color: getLatencyColor(node.delayTime) }}>
+                <span className="col-latency" style={{ color: getLatencyColor(node.delayTime, theme) }}>
                   {formatLatency(node.delayTime)}
                 </span>
-                <span className="col-speed" style={{ color: getSpeedColor(node.speed) }}>
+                <span className="col-speed" style={{ color: getSpeedColor(node.speed, theme) }}>
                   {formatSpeed(node.speed)}
                 </span>
               </div>
@@ -195,14 +195,14 @@ const UserNode = memo(({ data }) => {
 
       <div className={`rule-label ${isDisabled ? 'disabled' : ''} ${isCovered ? 'covered' : ''}`}>
         {isDisabled && <BlockIcon sx={{ fontSize: 12, mr: 0.5 }} />}
-        {isCovered && !isDisabled && <WarningAmberIcon sx={{ fontSize: 12, mr: 0.5, color: '#eab308' }} />}
+        {isCovered && !isDisabled && <WarningAmberIcon sx={{ fontSize: 12, mr: 0.5, color: 'warning.main' }} />}
         {data.ruleLabel}
         {isCovered && <span className="covered-tag">已被覆盖</span>}
         {isDisabled && <span className="disabled-tag">已禁用</span>}
       </div>
 
       <div className="node-icon">
-        <PersonIcon sx={{ color: '#3b82f6' }} />
+        <PersonIcon sx={{ color: 'primary.main' }} />
       </div>
       <div className="node-label">用户</div>
     </div>
@@ -212,6 +212,7 @@ UserNode.displayName = 'UserNode';
 
 // 代理节点组件 - 点击展开详情
 const ProxyNode = memo(({ data }) => {
+  const theme = useTheme();
   const isVariant = data.index % 2 === 1;
 
   const handleClick = useCallback(
@@ -230,7 +231,7 @@ const ProxyNode = memo(({ data }) => {
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
 
-      <div className="node-icon">{getNodeIcon(data.type)}</div>
+      <div className="node-icon">{getNodeIcon(data.type, theme)}</div>
       <div className="node-label" title={data.label}>
         {data.label}
       </div>
@@ -265,7 +266,7 @@ const TargetNode = memo(({ data }) => {
       <Handle type="source" position={Position.Right} />
 
       <div className="node-icon">
-        <FlagIcon sx={{ color: '#f97316' }} />
+        <FlagIcon sx={{ color: 'warning.main' }} />
       </div>
       <div className="node-label">落地节点</div>
       <div className="node-type-label">{data.targetInfo || '全部节点'}</div>
@@ -286,7 +287,7 @@ const InternetNode = memo(() => {
     <div className="sci-fi-node internet-node">
       <Handle type="target" position={Position.Left} />
       <div className="node-icon">
-        <PublicIcon sx={{ color: '#22c55e' }} />
+        <PublicIcon sx={{ color: 'success.main' }} />
       </div>
       <div className="node-label">🌐 互联网</div>
     </div>
@@ -296,6 +297,7 @@ InternetNode.displayName = 'InternetNode';
 
 // 动态粒子边
 const AnimatedEdge = ({ id, sourceX, sourceY, targetX, targetY, data }) => {
+  const theme = useTheme();
   const [edgePath] = getBezierPath({
     sourceX,
     sourceY,
@@ -304,7 +306,7 @@ const AnimatedEdge = ({ id, sourceX, sourceY, targetX, targetY, data }) => {
     curvature: 0.25
   });
 
-  const color = data?.color || '#3b82f6';
+  const color = data?.color || theme.palette.primary.main;
 
   return (
     <>
@@ -317,8 +319,8 @@ const AnimatedEdge = ({ id, sourceX, sourceY, targetX, targetY, data }) => {
           </feMerge>
         </filter>
       </defs>
-      <path d={edgePath} fill="none" stroke={color} strokeWidth={6} strokeOpacity={0.15} filter={`url(#glow-${id})`} />
-      <path d={edgePath} fill="none" stroke={color} strokeWidth={2} strokeOpacity={0.6} />
+      <path d={edgePath} fill="none" stroke={color} strokeWidth={4} strokeOpacity={0.08} filter={`url(#glow-${id})`} />
+      <path d={edgePath} fill="none" stroke={color} strokeWidth={1.75} strokeOpacity={0.52} />
       <path d={edgePath} fill="none" stroke={color} strokeWidth={2} strokeDasharray="4 16" className="particle-flow" />
     </>
   );
@@ -343,10 +345,10 @@ const NODE_V_GAP = 180;
 const START_X = 50;
 const START_Y = 60;
 
-/**
- * 链式代理科幻画布视图
- */
 export default function ChainCanvasView({ rules = [], fullscreen = false }) {
+  const theme = useTheme();
+  const { isDark } = useResolvedColorScheme();
+  const tokens = getChainProxyThemeTokens(theme, isDark);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
@@ -376,7 +378,14 @@ export default function ChainCanvasView({ rules = [], fullscreen = false }) {
 
       if (!rules || rules.length === 0) return { nodes, edges };
 
-      const edgeColors = ['#3b82f6', '#06b6d4', '#8b5cf6', '#22c55e', '#f97316', '#ec4899'];
+      const edgeColors = [
+        theme.palette.primary.main,
+        theme.palette.info.main,
+        theme.palette.secondary.main,
+        theme.palette.success.main,
+        theme.palette.warning.main,
+        theme.palette.error.main
+      ];
 
       let currentY = START_Y;
 
@@ -461,7 +470,7 @@ export default function ChainCanvasView({ rules = [], fullscreen = false }) {
           source: prevNodeId,
           target: targetId,
           type: 'animated',
-          data: { color: '#f97316' }
+          data: { color: theme.palette.warning.main }
         });
 
         xOffset += NODE_H_GAP;
@@ -481,7 +490,7 @@ export default function ChainCanvasView({ rules = [], fullscreen = false }) {
           source: targetId,
           target: internetId,
           type: 'animated',
-          data: { color: '#22c55e' }
+          data: { color: theme.palette.success.main }
         });
 
         currentY += NODE_V_GAP;
@@ -489,7 +498,7 @@ export default function ChainCanvasView({ rules = [], fullscreen = false }) {
 
       return { nodes, edges };
     },
-    [handleShowDetail]
+    [handleShowDetail, theme]
   );
 
   // 规则变化时重新生成
@@ -513,6 +522,7 @@ export default function ChainCanvasView({ rules = [], fullscreen = false }) {
       <Box
         className="chain-canvas-container"
         sx={{
+          ...getChainProxyCanvasCssVars(tokens),
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -520,14 +530,19 @@ export default function ChainCanvasView({ rules = [], fullscreen = false }) {
           gap: 2
         }}
       >
-        <MemoryIcon sx={{ fontSize: 64, color: 'rgba(59, 130, 246, 0.3)' }} />
-        <Typography sx={{ color: '#64748b', textAlign: 'center' }}>暂无链式代理规则</Typography>
+        <MemoryIcon sx={{ fontSize: 64, color: alpha(theme.palette.primary.main, 0.28) }} />
+        <Typography sx={{ color: 'text.secondary', textAlign: 'center' }}>暂无链式代理规则</Typography>
       </Box>
     );
   }
 
   return (
-    <Box className={`chain-canvas-container ${fullscreen ? 'fullscreen' : ''}`}>
+    <Box
+      className={`chain-canvas-container ${fullscreen ? 'fullscreen' : ''}`}
+      sx={{
+        ...getChainProxyCanvasCssVars(tokens)
+      }}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -551,14 +566,14 @@ export default function ChainCanvasView({ rules = [], fullscreen = false }) {
         <Controls showInteractive={false} />
         <MiniMap
           nodeColor={(node) => {
-            if (node.type === 'userNode') return '#3b82f6';
-            if (node.type === 'proxyNode') return '#06b6d4';
-            if (node.type === 'targetNode') return '#f97316';
-            if (node.type === 'internetNode') return '#22c55e';
-            return '#64748b';
+            if (node.type === 'userNode') return theme.palette.primary.main;
+            if (node.type === 'proxyNode') return theme.palette.secondary.main;
+            if (node.type === 'targetNode') return theme.palette.warning.main;
+            if (node.type === 'internetNode') return theme.palette.success.main;
+            return theme.palette.text.secondary;
           }}
-          maskColor="rgba(15, 23, 42, 0.8)"
-          style={{ background: 'rgba(15, 23, 42, 0.8)' }}
+          maskColor={tokens.containerSurface}
+          style={{ background: tokens.canvasElevatedSurface }}
         />
       </ReactFlow>
 
@@ -581,25 +596,49 @@ export default function ChainCanvasView({ rules = [], fullscreen = false }) {
           size="small"
           icon={<PersonIcon sx={{ fontSize: 14 }} />}
           label="用户"
-          sx={{ bgcolor: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd', border: '1px solid rgba(59, 130, 246, 0.4)', fontSize: 11 }}
+          sx={{
+            bgcolor: tokens.primarySurface,
+            color: 'primary.main',
+            border: '1px solid',
+            borderColor: tokens.primarySoftBorder,
+            fontSize: 11
+          }}
         />
         <Chip
           size="small"
           icon={<HubIcon sx={{ fontSize: 14 }} />}
           label="代理链"
-          sx={{ bgcolor: 'rgba(6, 182, 212, 0.2)', color: '#67e8f9', border: '1px solid rgba(6, 182, 212, 0.4)', fontSize: 11 }}
+          sx={{
+            bgcolor: tokens.secondarySurface,
+            color: 'secondary.main',
+            border: '1px solid',
+            borderColor: tokens.secondarySoftBorder,
+            fontSize: 11
+          }}
         />
         <Chip
           size="small"
           icon={<FlagIcon sx={{ fontSize: 14 }} />}
           label="落地"
-          sx={{ bgcolor: 'rgba(249, 115, 22, 0.2)', color: '#fdba74', border: '1px solid rgba(249, 115, 22, 0.4)', fontSize: 11 }}
+          sx={{
+            bgcolor: tokens.warningSurface,
+            color: 'warning.main',
+            border: '1px solid',
+            borderColor: tokens.warningSoftBorder,
+            fontSize: 11
+          }}
         />
         <Chip
           size="small"
           icon={<PublicIcon sx={{ fontSize: 14 }} />}
           label="互联网"
-          sx={{ bgcolor: 'rgba(34, 197, 94, 0.2)', color: '#86efac', border: '1px solid rgba(34, 197, 94, 0.4)', fontSize: 11 }}
+          sx={{
+            bgcolor: tokens.successSurface,
+            color: 'success.main',
+            border: '1px solid',
+            borderColor: tokens.successSoftBorder,
+            fontSize: 11
+          }}
         />
       </Box>
     </Box>

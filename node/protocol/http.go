@@ -9,16 +9,57 @@ import (
 	"sublink/utils"
 )
 
+func init() {
+	MustRegisterProtocol(newProxySurgeProtocolSpec(
+		newProtocolSpec("http", []string{"http://"}, "HTTP", "#0288d1", "H", HTTP{}, "Name", DecodeHTTPURL, EncodeHTTPURL, func(h HTTP) LinkIdentity {
+			return buildIdentity("http", h.Name, h.Server, utils.GetPortString(h.Port))
+		},
+			FieldMeta{Name: "Name", Label: "节点名称", Type: "string", Group: "basic"},
+			FieldMeta{Name: "Server", Label: "服务器地址", Type: "string", Group: "basic"},
+			FieldMeta{Name: "Port", Label: "端口", Type: "int", Group: "basic"},
+			FieldMeta{Name: "Username", Label: "用户名", Type: "string", Group: "auth", Advanced: true},
+			FieldMeta{Name: "Password", Label: "密码", Type: "string", Group: "auth", Secret: true, Advanced: true},
+			FieldMeta{Name: "TLS", Label: "启用 TLS", Type: "bool", Group: "tls"},
+			FieldMeta{Name: "SkipCertVerify", Label: "跳过证书校验", Type: "bool", Group: "tls", Advanced: true},
+			FieldMeta{Name: "SNI", Label: "SNI", Type: "string", Group: "tls", Advanced: true},
+		),
+		buildHTTPProxy,
+		func(proxy Proxy) bool { return proxyTypeMatches(proxy, "http") && !proxy.Tls },
+		ConvertProxyToHTTP,
+		EncodeHTTPURL,
+		buildHTTPProxySurgeLine,
+	))
+	MustRegisterProtocol(newProxySurgeProtocolSpec(
+		newProtocolSpec("https", []string{"https://"}, "HTTPS", "#0277bd", "H", HTTP{}, "Name", DecodeHTTPURL, EncodeHTTPURL, func(h HTTP) LinkIdentity {
+			return buildIdentity("https", h.Name, h.Server, utils.GetPortString(h.Port))
+		},
+			FieldMeta{Name: "Name", Label: "节点名称", Type: "string", Group: "basic"},
+			FieldMeta{Name: "Server", Label: "服务器地址", Type: "string", Group: "basic"},
+			FieldMeta{Name: "Port", Label: "端口", Type: "int", Group: "basic"},
+			FieldMeta{Name: "Username", Label: "用户名", Type: "string", Group: "auth", Advanced: true},
+			FieldMeta{Name: "Password", Label: "密码", Type: "string", Group: "auth", Secret: true, Advanced: true},
+			FieldMeta{Name: "TLS", Label: "启用 TLS", Type: "bool", Group: "tls"},
+			FieldMeta{Name: "SkipCertVerify", Label: "跳过证书校验", Type: "bool", Group: "tls", Advanced: true},
+			FieldMeta{Name: "SNI", Label: "SNI", Type: "string", Group: "tls", Advanced: true},
+		),
+		buildHTTPProxy,
+		func(proxy Proxy) bool { return proxyTypeMatches(proxy, "http", "https") && proxy.Tls },
+		ConvertProxyToHTTP,
+		EncodeHTTPURL,
+		buildHTTPProxySurgeLine,
+	))
+}
+
 // HTTP HTTP代理结构体
 type HTTP struct {
-	Name            string
-	Server          string
-	Port            interface{}
-	Username        string
-	Password        string
-	TLS             bool
-	SkipCertVerify  bool
-	SNI             string
+	Name           string
+	Server         string
+	Port           interface{}
+	Username       string
+	Password       string
+	TLS            bool
+	SkipCertVerify bool
+	SNI            string
 }
 
 // IsHTTPLink 判断链接是否是HTTP/HTTPS代理节点链接
@@ -27,38 +68,43 @@ func IsHTTPLink(link string) bool {
 	if !strings.HasPrefix(strings.ToLower(link), "http://") && !strings.HasPrefix(strings.ToLower(link), "https://") {
 		return false
 	}
-	
+
 	// 尝试解析为HTTP/HTTPS代理节点
 	_, err := DecodeHTTPURL(link)
 	if err != nil {
 		return false
 	}
-	
+
 	// 进一步验证：HTTP/HTTPS代理节点必须包含有效的服务器地址和端口
 	// 订阅转换链接通常不包含@符号（或者@符号后面不是有效的host:port格式）
 	u, err := url.Parse(link)
 	if err != nil {
 		return false
 	}
-	
+
 	// 检查是否有有效的host和port
 	host, port, err := net.SplitHostPort(u.Host)
 	if err != nil {
 		// 如果没有端口，可能是订阅转换链接
 		return false
 	}
-	
+
 	// 检查host是否为空
 	if host == "" {
 		return false
 	}
-	
+
+	// 代理节点不应携带路径/查询串（除 TLS 补充参数外），否则更可能是订阅转换链接
+	if u.Path != "" && u.Path != "/" {
+		return false
+	}
+
 	// 检查port是否为有效数字
 	portNum, err := strconv.Atoi(port)
 	if err != nil || portNum <= 0 || portNum > 65535 {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -91,11 +137,7 @@ func DecodeHTTPURL(s string) (HTTP, error) {
 		// 如果没有端口，使用默认端口
 		if strings.Contains(err.Error(), "missing port") {
 			host = u.Host
-			if u.Scheme == "https" {
-				port = "443"
-			} else {
-				port = "80"
-			}
+			port = defaultHTTPProxyPort(u.Scheme == "https")
 		} else {
 			return HTTP{}, fmt.Errorf("SplitHostPort error: %v", err)
 		}
@@ -104,11 +146,7 @@ func DecodeHTTPURL(s string) (HTTP, error) {
 
 	rawPort := port
 	if rawPort == "" {
-		if u.Scheme == "https" {
-			rawPort = "443"
-		} else {
-			rawPort = "80"
-		}
+		rawPort = defaultHTTPProxyPort(u.Scheme == "https")
 	}
 	httpProxy.Port, err = strconv.Atoi(rawPort)
 	if err != nil {
@@ -136,10 +174,7 @@ func DecodeHTTPURL(s string) (HTTP, error) {
 
 // EncodeHTTPURL 编码HTTP/HTTPS代理URL
 func EncodeHTTPURL(h HTTP) string {
-	scheme := "http"
-	if h.TLS {
-		scheme = "https"
-	}
+	scheme := httpProxyScheme(h.TLS)
 
 	u := url.URL{
 		Scheme:   scheme,
@@ -191,4 +226,45 @@ func ConvertProxyToHTTP(proxy Proxy) HTTP {
 		SkipCertVerify: proxy.Skip_cert_verify,
 		SNI:            proxy.Sni,
 	}
+}
+
+func buildHTTPProxy(link Urls, config OutputConfig) (Proxy, error) {
+	httpProxy, err := DecodeHTTPURL(link.Url)
+	if err != nil {
+		return Proxy{}, err
+	}
+	skipCert := config.Cert || httpProxy.SkipCertVerify
+	return Proxy{Name: httpProxy.Name, Type: "http", Server: httpProxy.Server, Port: FlexPort(utils.GetPortInt(httpProxy.Port)), Username: httpProxy.Username, Password: httpProxy.Password, Tls: httpProxy.TLS, Skip_cert_verify: skipCert, Sni: httpProxy.SNI, Dialer_proxy: link.DialerProxyName}, nil
+}
+
+func buildHTTPProxySurgeLine(link string, config OutputConfig) (string, string, error) {
+	httpProxy, err := DecodeHTTPURL(link)
+	if err != nil {
+		return "", "", err
+	}
+
+	line := fmt.Sprintf("%s = %s, %s, %d, username=%s, password=%s", httpProxy.Name, httpProxyScheme(httpProxy.TLS), httpProxy.Server, utils.GetPortInt(httpProxy.Port), httpProxy.Username, httpProxy.Password)
+	if httpProxy.TLS {
+		skipCert := config.Cert || httpProxy.SkipCertVerify
+		line = fmt.Sprintf("%s, skip-cert-verify=%t", line, skipCert)
+		if httpProxy.SNI != "" {
+			line = fmt.Sprintf("%s, sni=%s", line, httpProxy.SNI)
+		}
+	}
+
+	return line, httpProxy.Name, nil
+}
+
+func httpProxyScheme(tls bool) string {
+	if tls {
+		return "https"
+	}
+	return "http"
+}
+
+func defaultHTTPProxyPort(tls bool) string {
+	if tls {
+		return "443"
+	}
+	return "80"
 }

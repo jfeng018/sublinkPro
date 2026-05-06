@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 // material-ui
-import { useTheme, alpha } from '@mui/material/styles';
+import { useTheme } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import Avatar from '@mui/material/Avatar';
 import Badge from '@mui/material/Badge';
@@ -25,6 +25,9 @@ import Tooltip from '@mui/material/Tooltip';
 import MainCard from 'ui-component/cards/MainCard';
 import Transitions from 'ui-component/extended/Transitions';
 import { useAuth } from 'contexts/AuthContext';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
+import { getHeaderPopoverTokens, getHeaderTriggerTokens } from '../headerPopoverTokens';
+import { withAlpha } from 'utils/colorUtils';
 
 // assets
 import { IconBell, IconCheck, IconTrash, IconCircleCheck, IconCircleX, IconInfoCircle } from '@tabler/icons-react';
@@ -49,6 +52,29 @@ export default function NotificationSection() {
   const theme = useTheme();
   const downMD = useMediaQuery(theme.breakpoints.down('md'));
   const { notifications, clearAllNotifications } = useAuth();
+  const { isDark } = useResolvedColorScheme();
+  const bellAccent = isDark ? theme.palette.warning.main : theme.palette.warning.dark;
+  const {
+    popoverSurface,
+    popoverSurfaceAccent,
+    popoverBorder,
+    popoverInsetShadow,
+    headerSurface,
+    headerDivider,
+    mutedText,
+    listItemHover,
+    selectedSurface,
+    selectedHoverSurface
+  } = getHeaderPopoverTokens(theme, isDark);
+  const { triggerColor, triggerSurface, triggerBorder, activeColor, activeSurface, activeBorder } = getHeaderTriggerTokens(
+    theme,
+    isDark,
+    bellAccent,
+    {
+      lightSurfaceAlpha: 0.14,
+      lightHoverAlpha: 0.22
+    }
+  );
 
   const [open, setOpen] = useState(false);
   // 从 localStorage 初始化已读状态
@@ -146,12 +172,15 @@ export default function NotificationSection() {
                 ...theme.typography.commonAvatar,
                 ...theme.typography.mediumAvatar,
                 transition: 'all .2s ease-in-out',
-                color: theme.palette.warning.dark,
-                background: theme.palette.warning.light,
+                color: triggerColor,
+                background: triggerSurface,
+                border: '1px solid',
+                borderColor: triggerBorder,
                 position: 'relative',
                 '&:hover, &[aria-controls="menu-list-grow"]': {
-                  color: theme.palette.warning.light,
-                  background: theme.palette.warning.dark
+                  color: activeColor,
+                  background: activeSurface,
+                  borderColor: activeBorder
                 }
               }}
               ref={anchorRef}
@@ -176,18 +205,29 @@ export default function NotificationSection() {
         {({ TransitionProps }) => (
           <ClickAwayListener onClickAway={handleClose}>
             <Transitions position={downMD ? 'top' : 'top-right'} in={open} {...TransitionProps}>
-              <Paper>
+              <Paper sx={{ bgcolor: 'transparent' }}>
                 {open && (
                   <MainCard
                     border={false}
-                    elevation={16}
+                    elevation={0}
                     content={false}
                     boxShadow
-                    shadow={theme.shadows[16]}
-                    sx={{ minWidth: 330, maxWidth: 400 }}
+                    shadow={isDark ? 'none' : theme.shadows[12]}
+                    sx={{
+                      minWidth: 330,
+                      maxWidth: 400,
+                      bgcolor: popoverSurface,
+                      backgroundImage: popoverSurfaceAccent,
+                      border: '1px solid',
+                      borderColor: popoverBorder,
+                      boxShadow: popoverInsetShadow
+                    }}
                   >
                     <Stack sx={{ gap: 2 }}>
-                      <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between', pt: 2, px: 2 }}>
+                      <Stack
+                        direction="row"
+                        sx={{ alignItems: 'center', justifyContent: 'space-between', pt: 2, px: 2, bgcolor: headerSurface }}
+                      >
                         <Stack direction="row" sx={{ gap: 1, alignItems: 'center' }}>
                           <Typography variant="subtitle1">通知消息</Typography>
                           {unreadCount > 0 && (
@@ -196,8 +236,10 @@ export default function NotificationSection() {
                               label={unreadCount}
                               variant="filled"
                               sx={{
-                                color: 'background.default',
-                                bgcolor: 'warning.dark',
+                                color: isDark ? 'warning.main' : 'background.default',
+                                bgcolor: isDark ? withAlpha(theme.palette.warning.main, 0.14) : 'warning.dark',
+                                border: '1px solid',
+                                borderColor: withAlpha(theme.palette.warning.main, isDark ? 0.28 : 0),
                                 height: 20,
                                 fontSize: '0.75rem'
                               }}
@@ -215,7 +257,7 @@ export default function NotificationSection() {
                           </Button>
                         )}
                       </Stack>
-                      <Divider />
+                      <Divider sx={{ borderColor: headerDivider }} />
                       <Box
                         sx={{
                           height: 'auto',
@@ -236,12 +278,12 @@ export default function NotificationSection() {
                                   sx={{
                                     py: 1.5,
                                     px: 2,
-                                    bgcolor: isRead ? 'transparent' : alpha(theme.palette.primary.light, 0.15),
-                                    borderBottom: `1px solid ${theme.palette.divider}`,
+                                    bgcolor: isRead ? 'transparent' : selectedSurface,
+                                    borderBottom: `1px solid ${popoverBorder}`,
                                     cursor: 'pointer',
                                     transition: 'background-color 0.2s',
                                     '&:hover': {
-                                      bgcolor: alpha(theme.palette.primary.light, 0.08)
+                                      bgcolor: isRead ? listItemHover : selectedHoverSurface
                                     }
                                   }}
                                   onClick={() => handleMarkAsRead(notification.id)}
@@ -284,7 +326,7 @@ export default function NotificationSection() {
                                       <>
                                         <Typography
                                           variant="body2"
-                                          color="textSecondary"
+                                          color={mutedText}
                                           sx={{
                                             ...(expandedIds.has(notification.id)
                                               ? { whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
@@ -299,8 +341,18 @@ export default function NotificationSection() {
                                         >
                                           {notification.message}
                                         </Typography>
+                                        {(notification.eventName || notification.categoryName) && (
+                                          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 0.75 }}>
+                                            {notification.categoryName && (
+                                              <Chip size="small" variant="outlined" label={notification.categoryName} />
+                                            )}
+                                            {notification.eventName && (
+                                              <Chip size="small" color="primary" variant="outlined" label={notification.eventName} />
+                                            )}
+                                          </Stack>
+                                        )}
                                         <Stack direction="row" justifyContent="space-between" alignItems="center">
-                                          <Typography variant="caption" color="textSecondary">
+                                          <Typography variant="caption" sx={{ color: mutedText }}>
                                             {notification.timestamp?.toLocaleString('zh-CN') || '刚刚'}
                                           </Typography>
                                           {notification.message && notification.message.length > 50 && (
@@ -323,7 +375,7 @@ export default function NotificationSection() {
                           </List>
                         ) : (
                           <Box sx={{ py: 4, textAlign: 'center' }}>
-                            <Typography variant="body2" color="textSecondary">
+                            <Typography variant="body2" sx={{ color: mutedText }}>
                               暂无通知消息
                             </Typography>
                           </Box>
@@ -331,7 +383,7 @@ export default function NotificationSection() {
                       </Box>
                     </Stack>
                     {notifications.length > 0 && (
-                      <CardActions sx={{ p: 1.25, justifyContent: 'center', borderTop: `1px solid ${theme.palette.divider}` }}>
+                      <CardActions sx={{ p: 1.25, justifyContent: 'center', borderTop: `1px solid ${popoverBorder}` }}>
                         <Button
                           size="small"
                           color="error"

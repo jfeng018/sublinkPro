@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // subcriptionCache 使用新的泛型缓存
@@ -51,6 +52,17 @@ type Subcription struct {
 	ProtocolBlacklist     string           `json:"ProtocolBlacklist"`                         // 协议黑名单（逗号分隔）
 	DeduplicationRule     string           `json:"DeduplicationRule"`                         // 去重规则配置(JSON)
 	RefreshUsageOnRequest bool             `gorm:"default:true" json:"RefreshUsageOnRequest"` // 获取订阅时是否实时刷新用量信息
+	MaxFraudScore         int              `gorm:"default:0" json:"MaxFraudScore"`            // 最大欺诈评分（0=不限制）
+	OnlyResidential       bool             `gorm:"default:false" json:"OnlyResidential"`      // 仅住宅IP
+	OnlyNative            bool             `gorm:"default:false" json:"OnlyNative"`           // 仅原生IP
+	ResidentialType       string           `json:"ResidentialType"`                           // 住宅属性过滤: residential/datacenter/untested
+	IPType                string           `json:"IPType"`                                    // IP类型过滤: native/broadcast/untested
+	QualityStatus         string           `json:"QualityStatus"`
+	UnlockProvider        string           `json:"UnlockProvider"`
+	UnlockStatus          string           `json:"UnlockStatus"`
+	UnlockKeyword         string           `json:"UnlockKeyword"`
+	UnlockRules           string           `json:"UnlockRules"`
+	UnlockRuleMode        string           `json:"UnlockRuleMode"`
 	CreatedAt             time.Time        `json:"CreatedAt"`
 	UpdatedAt             time.Time        `json:"UpdatedAt"`
 	DeletedAt             gorm.DeletedAt   `gorm:"index" json:"DeletedAt"`
@@ -75,7 +87,7 @@ type SubcriptionNode struct {
 // SubcriptionGroup 订阅与分组关联表
 type SubcriptionGroup struct {
 	SubcriptionID int    `gorm:"primaryKey"`
-	GroupName     string `gorm:"primaryKey"`
+	GroupName     string `gorm:"primaryKey;size:191"`
 	Sort          int    `gorm:"default:0"`
 }
 
@@ -187,6 +199,17 @@ func (sub *Subcription) Update() error {
 		"protocol_blacklist":       sub.ProtocolBlacklist,
 		"deduplication_rule":       sub.DeduplicationRule,
 		"refresh_usage_on_request": sub.RefreshUsageOnRequest,
+		"max_fraud_score":          sub.MaxFraudScore,
+		"only_residential":         sub.OnlyResidential,
+		"only_native":              sub.OnlyNative,
+		"residential_type":         sub.ResidentialType,
+		"ip_type":                  sub.IPType,
+		"quality_status":           sub.QualityStatus,
+		"unlock_provider":          sub.UnlockProvider,
+		"unlock_status":            sub.UnlockStatus,
+		"unlock_keyword":           sub.UnlockKeyword,
+		"unlock_rules":             sub.UnlockRules,
+		"unlock_rule_mode":         sub.UnlockRuleMode,
 	}
 	err := database.DB.Model(&Subcription{}).Where("id = ? or name = ?", sub.ID, sub.Name).Updates(updates).Error
 	if err != nil {
@@ -487,7 +510,57 @@ func (sub *Subcription) ApplyFilters(nodes []Node) []Node {
 		result = filteredNodes
 	}
 
-	// 6. 应用去重规则
+	residentialType := sub.ResidentialType
+	if residentialType == "" && sub.OnlyResidential {
+		residentialType = "residential"
+	}
+	ipType := sub.IPType
+	if ipType == "" && sub.OnlyNative {
+		ipType = "native"
+	}
+
+	// 6. 节点质量过滤
+	if sub.MaxFraudScore > 0 || residentialType != "" || ipType != "" || sub.QualityStatus != "" {
+		var filteredNodes []Node
+		for _, node := range result {
+			// 最大欺诈评分过滤
+			if sub.MaxFraudScore > 0 {
+				if getNodeQualityStatusValue(node) != QualityStatusSuccess || node.FraudScore < 0 || node.FraudScore > sub.MaxFraudScore {
+					continue
+				}
+			}
+			if !matchNodeQualityStatus(node, sub.QualityStatus) {
+				continue
+			}
+			if !matchNodeResidentialType(node, residentialType) {
+				continue
+			}
+			if !matchNodeIPType(node, ipType) {
+				continue
+			}
+			filteredNodes = append(filteredNodes, node)
+		}
+		result = filteredNodes
+	}
+
+	unlockRules := ParseUnlockFilterRules(sub.UnlockRules)
+	if len(unlockRules) == 0 && (sub.UnlockProvider != "" || sub.UnlockStatus != "" || sub.UnlockKeyword != "") {
+		unlockRules = []UnlockFilterRule{{Provider: sub.UnlockProvider, Status: sub.UnlockStatus, Keyword: sub.UnlockKeyword}}
+	}
+	unlockRuleMode := NormalizeUnlockRuleMode(sub.UnlockRuleMode)
+	if len(unlockRules) > 0 {
+		var filteredNodes []Node
+		for _, node := range result {
+			summary := ParseUnlockSummary(node.UnlockSummary)
+			if !MatchUnlockSummaryRulesWithMode(summary, unlockRules, unlockRuleMode) {
+				continue
+			}
+			filteredNodes = append(filteredNodes, node)
+		}
+		result = filteredNodes
+	}
+
+	// 7. 应用去重规则
 	result = sub.ApplyDeduplication(result)
 
 	return result
@@ -531,7 +604,7 @@ func (sub *Subcription) GetSub(clientType string) error {
 	for _, group := range groups {
 		var groupNodes []Node
 		err = database.DB.Table("nodes").
-			Where("nodes.`group` = ?", group.GroupName).
+			Where(clause.Eq{Column: clause.Column{Table: "nodes", Name: "group"}, Value: group.GroupName}).
 			Order("nodes.id ASC").
 			Find(&groupNodes).Error
 		if err != nil {
@@ -1148,18 +1221,7 @@ func (sub *Subcription) PreviewSub() (*PreviewResult, error) {
 		previewLink := node.Link
 
 		if sub.NodeNameRule != "" {
-			previewName = utils.RenameNode(sub.NodeNameRule, utils.NodeInfo{
-				Name:        node.Name,
-				LinkName:    processedLinkName,
-				LinkCountry: node.LinkCountry,
-				Speed:       node.Speed,
-				DelayTime:   node.DelayTime,
-				Group:       node.Group,
-				Source:      node.Source,
-				Index:       idx + 1,
-				Protocol:    utils.GetProtocolFromLink(node.Link),
-				Tags:        node.Tags,
-			})
+			previewName = utils.RenameNode(sub.NodeNameRule, BuildNodeRenameInfo(node, processedLinkName, utils.GetProtocolFromLink(node.Link), idx+1))
 			previewLink = utils.RenameNodeLink(node.Link, previewName)
 		}
 
@@ -1381,40 +1443,11 @@ func deduplicateByProtocol(nodes []Node, protocolRules map[string][]string) []No
 
 // generateProtocolKey 根据协议解析结果生成去重Key
 func generateProtocolKey(link string, protoType string, fields []string) string {
-	var protoObj interface{}
-	var err error
-
-	// 根据协议类型解析节点
-	switch protoType {
-	case "vmess":
-		protoObj, err = protocol.DecodeVMESSURL(link)
-	case "vless":
-		protoObj, err = protocol.DecodeVLESSURL(link)
-	case "trojan":
-		protoObj, err = protocol.DecodeTrojanURL(link)
-	case "ss":
-		protoObj, err = protocol.DecodeSSURL(link)
-	case "ssr":
-		protoObj, err = protocol.DecodeSSRURL(link)
-	case "hysteria":
-		protoObj, err = protocol.DecodeHYURL(link)
-	case "hysteria2":
-		protoObj, err = protocol.DecodeHY2URL(link)
-	case "tuic":
-		protoObj, err = protocol.DecodeTuicURL(link)
-	case "anytls":
-		protoObj, err = protocol.DecodeAnyTLSURL(link)
-	case "socks5":
-		protoObj, err = protocol.DecodeSocks5URL(link)
-	case "http":
-		protoObj, err = protocol.DecodeHTTPURL(link)
-	case "https":
-		protoObj, err = protocol.DecodeHTTPURL(link)
-	default:
+	protoObj, detectedProto, err := protocol.DecodeProtocolObject(link)
+	if err != nil {
 		return ""
 	}
-
-	if err != nil {
+	if detectedProto != protoType {
 		return ""
 	}
 

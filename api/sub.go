@@ -6,11 +6,51 @@ import (
 	"sublink/dto"
 	"sublink/models"
 	"sublink/node/protocol"
+	"sublink/services/unlock"
 	"sublink/utils"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+func normalizeSubscriptionResidentialType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "residential", "datacenter", "untested":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeSubscriptionIPType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "native", "broadcast", "untested":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeSubscriptionQualityStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case models.QualityStatusUntested, models.QualityStatusSuccess, models.QualityStatusPartial, models.QualityStatusFailed, models.QualityStatusDisabled:
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeSubscriptionUnlockStatus(value string) string {
+	return unlock.NormalizeUnlockStatus(value)
+}
+
+func parseUnlockRulesFromForm(raw string, provider string, status string, keyword string) string {
+	rules := models.ParseUnlockFilterRules(raw)
+	if len(rules) == 0 && (provider != "" || status != "" || keyword != "") {
+		rules = []models.UnlockFilterRule{{Provider: provider, Status: status, Keyword: keyword}}
+	}
+	return models.BuildUnlockFilterRulesJSON(rules)
+}
 
 func SubTotal(c *gin.Context) {
 	var Sub models.Subcription
@@ -98,6 +138,24 @@ func SubAdd(c *gin.Context) {
 	deduplicationRule := c.PostForm("DeduplicationRule")
 	refreshUsageOnRequestStr := c.PostForm("RefreshUsageOnRequest")
 	refreshUsageOnRequest := refreshUsageOnRequestStr != "false" // 默认为 true
+	maxFraudScoreStr := c.PostForm("MaxFraudScore")
+	maxFraudScore, _ := strconv.Atoi(maxFraudScoreStr)
+	onlyResidential := c.PostForm("OnlyResidential") == "true"
+	onlyNative := c.PostForm("OnlyNative") == "true"
+	residentialType := normalizeSubscriptionResidentialType(c.PostForm("ResidentialType"))
+	ipType := normalizeSubscriptionIPType(c.PostForm("IPType"))
+	qualityStatus := normalizeSubscriptionQualityStatus(c.PostForm("QualityStatus"))
+	unlockProvider := models.NormalizeUnlockProvider(c.PostForm("UnlockProvider"))
+	unlockStatus := normalizeSubscriptionUnlockStatus(c.PostForm("UnlockStatus"))
+	unlockKeyword := strings.TrimSpace(c.PostForm("UnlockKeyword"))
+	unlockRuleMode := models.NormalizeUnlockRuleMode(c.PostForm("UnlockRuleMode"))
+	unlockRules := parseUnlockRulesFromForm(c.PostForm("UnlockRules"), unlockProvider, unlockStatus, unlockKeyword)
+	if residentialType == "" && onlyResidential {
+		residentialType = "residential"
+	}
+	if ipType == "" && onlyNative {
+		ipType = "native"
+	}
 
 	if name == "" || (nodeIds == "" && groups == "") {
 		utils.FailWithMsg(c, "订阅名称不能为空，且节点或分组至少选择一项")
@@ -170,6 +228,17 @@ func SubAdd(c *gin.Context) {
 	sub.ProtocolBlacklist = protocolBlacklist
 	sub.DeduplicationRule = deduplicationRule
 	sub.RefreshUsageOnRequest = refreshUsageOnRequest
+	sub.MaxFraudScore = maxFraudScore
+	sub.OnlyResidential = residentialType == "residential"
+	sub.OnlyNative = ipType == "native"
+	sub.ResidentialType = residentialType
+	sub.IPType = ipType
+	sub.QualityStatus = qualityStatus
+	sub.UnlockProvider = unlockProvider
+	sub.UnlockStatus = unlockStatus
+	sub.UnlockKeyword = unlockKeyword
+	sub.UnlockRules = unlockRules
+	sub.UnlockRuleMode = unlockRuleMode
 	sub.CreateDate = time.Now().Format("2006-01-02 15:04:05")
 
 	err := sub.Add()
@@ -250,6 +319,24 @@ func SubUpdate(c *gin.Context) {
 	deduplicationRule := c.PostForm("DeduplicationRule")
 	refreshUsageOnRequestStr := c.PostForm("RefreshUsageOnRequest")
 	refreshUsageOnRequest := refreshUsageOnRequestStr != "false" // 默认为 true
+	maxFraudScoreStr := c.PostForm("MaxFraudScore")
+	maxFraudScore, _ := strconv.Atoi(maxFraudScoreStr)
+	onlyResidential := c.PostForm("OnlyResidential") == "true"
+	onlyNative := c.PostForm("OnlyNative") == "true"
+	residentialType := normalizeSubscriptionResidentialType(c.PostForm("ResidentialType"))
+	ipType := normalizeSubscriptionIPType(c.PostForm("IPType"))
+	qualityStatus := normalizeSubscriptionQualityStatus(c.PostForm("QualityStatus"))
+	unlockProvider := models.NormalizeUnlockProvider(c.PostForm("UnlockProvider"))
+	unlockStatus := normalizeSubscriptionUnlockStatus(c.PostForm("UnlockStatus"))
+	unlockKeyword := strings.TrimSpace(c.PostForm("UnlockKeyword"))
+	unlockRuleMode := models.NormalizeUnlockRuleMode(c.PostForm("UnlockRuleMode"))
+	unlockRules := parseUnlockRulesFromForm(c.PostForm("UnlockRules"), unlockProvider, unlockStatus, unlockKeyword)
+	if residentialType == "" && onlyResidential {
+		residentialType = "residential"
+	}
+	if ipType == "" && onlyNative {
+		ipType = "native"
+	}
 
 	if name == "" || (nodeIds == "" && groups == "") {
 		utils.FailWithMsg(c, "订阅名称不能为空，且节点或分组至少选择一项")
@@ -332,6 +419,17 @@ func SubUpdate(c *gin.Context) {
 	sub.ProtocolBlacklist = protocolBlacklist
 	sub.DeduplicationRule = deduplicationRule
 	sub.RefreshUsageOnRequest = refreshUsageOnRequest
+	sub.MaxFraudScore = maxFraudScore
+	sub.OnlyResidential = residentialType == "residential"
+	sub.OnlyNative = ipType == "native"
+	sub.ResidentialType = residentialType
+	sub.IPType = ipType
+	sub.QualityStatus = qualityStatus
+	sub.UnlockProvider = unlockProvider
+	sub.UnlockStatus = unlockStatus
+	sub.UnlockKeyword = unlockKeyword
+	sub.UnlockRules = unlockRules
+	sub.UnlockRuleMode = unlockRuleMode
 	err = sub.Update()
 	if err != nil {
 		utils.FailWithMsg(c, "更新失败")
@@ -496,6 +594,8 @@ func GetProtocolMeta(c *gin.Context) {
 
 // GetNodeFieldsMeta 获取节点通用字段元数据
 func GetNodeFieldsMeta(c *gin.Context) {
-	meta := models.GetNodeFieldsMeta()
-	utils.OkDetailed(c, "获取成功", meta)
+	utils.OkDetailed(c, "获取成功", gin.H{
+		"fields":          models.GetNodeFieldsMeta(),
+		"conditionFields": models.GetNodeConditionFields(),
+	})
 }

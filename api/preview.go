@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 	"sublink/database"
 	"sublink/models"
 	"sublink/utils"
@@ -17,21 +18,32 @@ type PreviewRequest struct {
 	SubscriptionID int `json:"SubscriptionID"`
 
 	// 以下字段用于表单预览（未保存的订阅）
-	NodeIDs            []int    `json:"NodeIDs"`            // 选中的节点ID列表（带排序）
-	NodeSorts          []int    `json:"NodeSorts"`          // 节点对应的排序值
-	Groups             []string `json:"Groups"`             // 选中的分组列表
-	GroupSorts         []int    `json:"GroupSorts"`         // 分组对应的排序值
-	Scripts            []int    `json:"Scripts"`            // 选中的脚本ID列表
-	DelayTime          int      `json:"DelayTime"`          // 最大延迟过滤
-	MinSpeed           float64  `json:"MinSpeed"`           // 最小速度过滤
-	CountryWhitelist   string   `json:"CountryWhitelist"`   // 国家白名单
-	CountryBlacklist   string   `json:"CountryBlacklist"`   // 国家黑名单
-	TagWhitelist       string   `json:"TagWhitelist"`       // 标签白名单
-	TagBlacklist       string   `json:"TagBlacklist"`       // 标签黑名单
-	ProtocolWhitelist  string   `json:"ProtocolWhitelist"`  // 协议白名单
-	ProtocolBlacklist  string   `json:"ProtocolBlacklist"`  // 协议黑名单
-	NodeNameWhitelist  string   `json:"NodeNameWhitelist"`  // 节点名称白名单
-	NodeNameBlacklist  string   `json:"NodeNameBlacklist"`  // 节点名称黑名单
+	NodeIDs            []int    `json:"NodeIDs"`           // 选中的节点ID列表（带排序）
+	NodeSorts          []int    `json:"NodeSorts"`         // 节点对应的排序值
+	Groups             []string `json:"Groups"`            // 选中的分组列表
+	GroupSorts         []int    `json:"GroupSorts"`        // 分组对应的排序值
+	Scripts            []int    `json:"Scripts"`           // 选中的脚本ID列表
+	DelayTime          int      `json:"DelayTime"`         // 最大延迟过滤
+	MinSpeed           float64  `json:"MinSpeed"`          // 最小速度过滤
+	CountryWhitelist   string   `json:"CountryWhitelist"`  // 国家白名单
+	CountryBlacklist   string   `json:"CountryBlacklist"`  // 国家黑名单
+	TagWhitelist       string   `json:"TagWhitelist"`      // 标签白名单
+	TagBlacklist       string   `json:"TagBlacklist"`      // 标签黑名单
+	ProtocolWhitelist  string   `json:"ProtocolWhitelist"` // 协议白名单
+	ProtocolBlacklist  string   `json:"ProtocolBlacklist"` // 协议黑名单
+	NodeNameWhitelist  string   `json:"NodeNameWhitelist"` // 节点名称白名单
+	NodeNameBlacklist  string   `json:"NodeNameBlacklist"` // 节点名称黑名单
+	MaxFraudScore      int      `json:"MaxFraudScore"`     // 最大欺诈评分
+	OnlyResidential    bool     `json:"OnlyResidential"`   // 仅住宅IP
+	OnlyNative         bool     `json:"OnlyNative"`        // 仅原生IP
+	ResidentialType    string   `json:"ResidentialType"`   // 住宅属性过滤
+	IPType             string   `json:"IPType"`            // IP类型过滤
+	QualityStatus      string   `json:"QualityStatus"`
+	UnlockProvider     string   `json:"UnlockProvider"`
+	UnlockStatus       string   `json:"UnlockStatus"`
+	UnlockKeyword      string   `json:"UnlockKeyword"`
+	UnlockRules        string   `json:"UnlockRules"`
+	UnlockRuleMode     string   `json:"UnlockRuleMode"`
 	NodeNamePreprocess string   `json:"NodeNamePreprocess"` // 原名预处理规则
 	NodeNameRule       string   `json:"NodeNameRule"`       // 节点命名规则模板
 	DeduplicationRule  string   `json:"DeduplicationRule"`  // 去重规则配置
@@ -111,18 +123,7 @@ func previewSavedSubscription(subID int) (*models.PreviewResult, error) {
 		previewLink := node.Link
 
 		if sub.NodeNameRule != "" {
-			previewName = utils.RenameNode(sub.NodeNameRule, utils.NodeInfo{
-				Name:        node.Name,
-				LinkName:    processedLinkName,
-				LinkCountry: node.LinkCountry,
-				Speed:       node.Speed,
-				DelayTime:   node.DelayTime,
-				Group:       node.Group,
-				Source:      node.Source,
-				Index:       idx + 1,
-				Protocol:    utils.GetProtocolFromLink(node.Link),
-				Tags:        node.Tags,
-			})
+			previewName = utils.RenameNode(sub.NodeNameRule, models.BuildNodeRenameInfo(node, processedLinkName, utils.GetProtocolFromLink(node.Link), idx+1))
 			previewLink = utils.RenameNodeLink(node.Link, previewName)
 		}
 
@@ -161,9 +162,27 @@ func previewFormSubscription(req PreviewRequest) (*models.PreviewResult, error) 
 		ProtocolBlacklist:  req.ProtocolBlacklist,
 		NodeNameWhitelist:  req.NodeNameWhitelist,
 		NodeNameBlacklist:  req.NodeNameBlacklist,
+		MaxFraudScore:      req.MaxFraudScore,
+		OnlyResidential:    req.OnlyResidential,
+		OnlyNative:         req.OnlyNative,
+		ResidentialType:    req.ResidentialType,
+		IPType:             req.IPType,
+		QualityStatus:      req.QualityStatus,
+		UnlockProvider:     models.NormalizeUnlockProvider(req.UnlockProvider),
+		UnlockStatus:       strings.TrimSpace(req.UnlockStatus),
+		UnlockKeyword:      strings.TrimSpace(req.UnlockKeyword),
+		UnlockRules:        models.BuildUnlockFilterRulesJSON(models.ParseUnlockFilterRules(req.UnlockRules)),
+		UnlockRuleMode:     models.NormalizeUnlockRuleMode(req.UnlockRuleMode),
 		NodeNamePreprocess: req.NodeNamePreprocess,
 		NodeNameRule:       req.NodeNameRule,
 		DeduplicationRule:  req.DeduplicationRule,
+	}
+	if tempSub.UnlockRules == "" && (tempSub.UnlockProvider != "" || tempSub.UnlockStatus != "" || tempSub.UnlockKeyword != "") {
+		tempSub.UnlockRules = models.BuildUnlockFilterRulesJSON([]models.UnlockFilterRule{{
+			Provider: tempSub.UnlockProvider,
+			Status:   tempSub.UnlockStatus,
+			Keyword:  tempSub.UnlockKeyword,
+		}})
 	}
 
 	// 使用与 GetSub 相同的混合排序逻辑构建节点列表

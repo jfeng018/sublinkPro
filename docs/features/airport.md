@@ -14,6 +14,14 @@ SublinkPro 提供了完善的机场订阅管理功能，不仅能将订阅转换
 | **🚀 立即更新机制** | 支持一键「立即拉取」，配合实时回调机制，无需刷新页面即可看到最新的流量数据和节点列表 |
 | **🤖 Bot 集成管理** | 通过 Telegram Bot 可随时查询各订阅的剩余流量、到期时间，并支持远程触发更新任务 |
 
+### VLESS XHTTP 兼容说明
+
+- 机场订阅导入现已支持 `vless://` 链接中的 `type=xhttp`。
+- 当上游订阅是 Clash / mihomo YAML 且节点为 `type: vless`、`network: xhttp` 时，系统会识别 `xhttp-opts` 并回写为 VLESS URL。
+- 当前已支持的 URL 顶层字段包括：`type`、`path`、`host`、`mode`、`extra`。
+- `extra` 中已支持映射到 mihomo 的字段包括：`headers`、`noGRPCHeader`、`xPaddingBytes`、`downloadSettings` 及其已知子字段。
+- `xmux`、`sessionPlacement` 等在 Xray 侧存在但 mihomo 当前没有公开承载字段的扩展项，会被视为未支持，不会静默降级成 `http`、`h2` 或 `grpc`。
+
 ---
 
 ## 📱 界面展示
@@ -34,8 +42,23 @@ SublinkPro 提供了完善的机场订阅管理功能，不仅能将订阅转换
 1. 进入「机场管理」页面
 2. 点击「添加机场」
 3. 填写订阅链接和名称
-4. 配置更新策略（可选）
-5. 保存并拉取节点
+4. 按需配置请求设置（如 User-Agent、自定义 Header、代理下载）
+5. 配置更新策略（可选）
+6. 保存并拉取节点
+
+### 请求设置
+
+机场的「请求设置」支持配置拉取订阅时附带的请求参数：
+
+- `User-Agent`：使用专用输入框设置常见客户端 UA 或手动输入。
+- **自定义 Header**：可按 `Header 名称` + `Header 值` 的方式添加多条请求头，适合需要额外鉴权或来源标识的机场。
+- `使用代理下载`：通过指定节点或自动选择最佳节点拉取订阅。
+
+说明：
+
+- 自定义 Header 会在请求机场订阅地址时一并附带。
+- 如果开启了「获取用量信息」，系统在刷新机场用量时也会复用相同的自定义 Header。
+- `User-Agent` 使用单独字段管理，自定义 Header 中不支持再次填写 `User-Agent`。
 
 ### 配置定时更新
 

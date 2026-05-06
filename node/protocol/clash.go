@@ -109,6 +109,7 @@ type Proxy struct {
 	Packet_encoding string                 `yaml:"packet-encoding,omitempty"` // VLESS packet-encoding (xudp/packetaddr)
 	H2_opts         map[string]interface{} `yaml:"h2-opts,omitempty"`         // HTTP/2 传输层选项
 	Http_opts       map[string]interface{} `yaml:"http-opts,omitempty"`       // HTTP 传输层选项
+	XHTTP_opts      map[string]interface{} `yaml:"xhttp-opts,omitempty"`
 }
 
 type ProxyGroup struct {
@@ -154,6 +155,44 @@ func convertToInt(value interface{}) (int, error) {
 	}
 }
 
+func isTruthyConfigValue(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case int:
+		return v != 0
+	case int64:
+		return v != 0
+	case float64:
+		return v != 0
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+
+	return false
+}
+
+// shouldPreserveProxyGroup 判断代理组是否应保留模板原始语义，而不是在服务端展开成固定节点列表。
+func shouldPreserveProxyGroup(proxyGroup map[string]interface{}) bool {
+	for _, field := range []string{"include-all", "include-all-proxies", "include-all-providers"} {
+		if isTruthyConfigValue(proxyGroup[field]) {
+			return true
+		}
+	}
+
+	// Provider 组和自动匹配组由客户端在运行时解析，不能在服务端展开为固定节点列表。
+	for _, field := range []string{"use", "filter", "exclude-filter", "exclude-type", "expected-status"} {
+		if _, exists := proxyGroup[field]; exists {
+			return true
+		}
+	}
+
+	return false
+}
+
 // convertSSPluginOpts 将 SsPlugin 转换为 Clash 格式的 plugin-opts
 // 根据不同插件类型生成对应的配置
 func convertSSPluginOpts(plugin SsPlugin) map[string]interface{} {
@@ -195,440 +234,15 @@ func convertSSPluginOpts(plugin SsPlugin) map[string]interface{} {
 // LinkToProxy 将单个节点链接转换为 Proxy 结构体
 // 支持 ss, ssr, trojan, vmess, vless, hysteria, hysteria2, tuic, anytls, socks5, http, https 等协议
 func LinkToProxy(link Urls, config OutputConfig) (Proxy, error) {
-	Scheme := strings.ToLower(strings.Split(link.Url, "://")[0])
-	switch {
-	case Scheme == "ss":
-		ss, err := DecodeSSURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if ss.Name == "" {
-			ss.Name = fmt.Sprintf("%s:%s", ss.Server, utils.GetPortString(ss.Port))
-		}
-		proxy := Proxy{
-			Name:             ss.Name,
-			Type:             "ss",
-			Server:           ss.Server,
-			Port:             FlexPort(utils.GetPortInt(ss.Port)),
-			Cipher:           ss.Param.Cipher,
-			Password:         ss.Param.Password,
-			Udp:              config.Udp,
-			Skip_cert_verify: config.Cert,
-			Dialer_proxy:     link.DialerProxyName,
-		}
-		// 处理 SS 插件
-		if ss.Plugin.Name != "" {
-			// 插件名称映射：SS 链接中的 "simple-obfs"/"obfs-local" 在 Clash 中应该是 "obfs"
-			pluginName := ss.Plugin.Name
-			if pluginName == "simple-obfs" || pluginName == "obfs-local" {
-				pluginName = "obfs"
-			}
-			proxy.Plugin = pluginName
-			proxy.Plugin_opts = convertSSPluginOpts(ss.Plugin)
-		}
-
-		return proxy, nil
-
-	case Scheme == "ssr":
-		ssr, err := DecodeSSRURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if ssr.Qurey.Remarks == "" {
-			ssr.Qurey.Remarks = fmt.Sprintf("%s:%s", ssr.Server, utils.GetPortString(ssr.Port))
-		}
-		return Proxy{
-			Name:             ssr.Qurey.Remarks,
-			Type:             "ssr",
-			Server:           ssr.Server,
-			Port:             FlexPort(utils.GetPortInt(ssr.Port)),
-			Cipher:           ssr.Method,
-			Password:         ssr.Password,
-			Obfs:             ssr.Obfs,
-			Obfs_password:    ssr.Qurey.Obfsparam,
-			Protocol:         ssr.Protocol,
-			Udp:              config.Udp,
-			Skip_cert_verify: config.Cert,
-			Dialer_proxy:     link.DialerProxyName,
-		}, nil
-	case Scheme == "trojan":
-		trojan, err := DecodeTrojanURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if trojan.Name == "" {
-			trojan.Name = fmt.Sprintf("%s:%s", trojan.Hostname, utils.GetPortString(trojan.Port))
-		}
-		ws_opts := map[string]interface{}{
-			"path": trojan.Query.Path,
-			"headers": map[string]interface{}{
-				"Host": trojan.Query.Host,
-			},
-		}
-		DeleteOpts(ws_opts)
-		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
-		skipCert := config.Cert || trojan.Query.AllowInsecure == 1
-		return Proxy{
-			Name:               trojan.Name,
-			Type:               "trojan",
-			Server:             trojan.Hostname,
-			Port:               FlexPort(utils.GetPortInt(trojan.Port)),
-			Password:           trojan.Password,
-			Client_fingerprint: trojan.Query.Fp,
-			Sni:                trojan.Query.Sni,
-			Network:            trojan.Query.Type,
-			Flow:               trojan.Query.Flow,
-			Alpn:               trojan.Query.Alpn,
-			Ws_opts:            ws_opts,
-			Udp:                config.Udp,
-			Skip_cert_verify:   skipCert,
-			Dialer_proxy:       link.DialerProxyName,
-		}, nil
-	case Scheme == "vmess":
-		vmess, err := DecodeVMESSURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if vmess.Ps == "" {
-			vmess.Ps = fmt.Sprintf("%s:%s", vmess.Add, utils.GetPortString(vmess.Port))
-		}
-		ws_opts := map[string]interface{}{
-			"path": vmess.Path,
-			"headers": map[string]interface{}{
-				"Host": vmess.Host,
-			},
-		}
-		DeleteOpts(ws_opts)
-		tls := false
-		if vmess.Tls != "none" && vmess.Tls != "" {
-			tls = true
-		}
-		port, _ := convertToInt(vmess.Port)
-		aid, _ := convertToInt(vmess.Aid)
-		return Proxy{
-			Name:             vmess.Ps,
-			Type:             "vmess",
-			Server:           vmess.Add,
-			Port:             FlexPort(port),
-			Cipher:           vmess.Scy,
-			Uuid:             vmess.Id,
-			AlterId:          strconv.Itoa(aid),
-			Network:          vmess.Net,
-			Tls:              tls,
-			Ws_opts:          ws_opts,
-			Udp:              config.Udp,
-			Skip_cert_verify: config.Cert,
-			Dialer_proxy:     link.DialerProxyName,
-		}, nil
-	case Scheme == "vless":
-		vless, err := DecodeVLESSURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if vless.Name == "" {
-			vless.Name = fmt.Sprintf("%s:%s", vless.Server, utils.GetPortString(vless.Port))
-		}
-
-		// ws-opts 完整配置
-		ws_opts := map[string]interface{}{
-			"path": vless.Query.Path,
-			"headers": map[string]interface{}{
-				"Host": vless.Query.Host,
-			},
-		}
-		// 添加ws传输层的额外参数
-		if vless.Query.MaxEarlyData > 0 {
-			ws_opts["max-early-data"] = vless.Query.MaxEarlyData
-		}
-		if vless.Query.EarlyDataHeader != "" {
-			ws_opts["early-data-header-name"] = vless.Query.EarlyDataHeader
-		}
-		if vless.Query.HttpUpgrade == 1 {
-			ws_opts["v2ray-http-upgrade"] = true
-		}
-		if vless.Query.HttpUpgradeFastOpen == 1 {
-			ws_opts["v2ray-http-upgrade-fast-open"] = true
-		}
-
-		// h2-opts 完整配置
-		h2_opts := map[string]interface{}{}
-		if vless.Query.Host != "" {
-			h2_opts["host"] = []string{vless.Query.Host}
-		}
-		if vless.Query.Path != "" {
-			h2_opts["path"] = vless.Query.Path
-		}
-
-		// http-opts 完整配置
-		http_opts := map[string]interface{}{}
-		if vless.Query.Method != "" {
-			http_opts["method"] = vless.Query.Method
-		}
-		if vless.Query.Path != "" {
-			http_opts["path"] = []string{vless.Query.Path}
-		}
-		if vless.Query.Host != "" {
-			http_opts["headers"] = map[string]interface{}{
-				"Host": []string{vless.Query.Host},
-			}
-		}
-
-		// grpc-opts 完整配置
-		grpc_opts := map[string]interface{}{
-			"grpc-service-name": vless.Query.ServiceName,
-		}
-		if vless.Query.Mode != "" {
-			grpc_opts["grpc-mode"] = vless.Query.Mode
-		} else if vless.Query.ServiceName != "" {
-			grpc_opts["grpc-mode"] = "gun" // 默认gun模式
-		}
-
-		// reality-opts 配置
-		reality_opts := map[string]interface{}{
-			"public-key": vless.Query.Pbk,
-			"short-id":   vless.Query.Sid,
-		}
-
-		// 删除空值
-		DeleteOpts(ws_opts)
-		DeleteOpts(h2_opts)
-		DeleteOpts(http_opts)
-		DeleteOpts(grpc_opts)
-		DeleteOpts(reality_opts)
-
-		// TLS判断
-		tls := false
-		if vless.Query.Security != "" && vless.Query.Security != "none" {
-			tls = true
-		}
-
-		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
-		skipCert := config.Cert || vless.Query.AllowInsecure == 1
-
-		// 根据传输层类型选择对应的opts
-		var finalWsOpts, finalH2Opts, finalHttpOpts, finalGrpcOpts map[string]interface{}
-		switch vless.Query.Type {
-		case "ws":
-			finalWsOpts = ws_opts
-		case "h2":
-			finalH2Opts = h2_opts
-		case "http":
-			finalHttpOpts = http_opts
-		case "grpc":
-			finalGrpcOpts = grpc_opts
-		default:
-			// tcp或其他类型不需要传输层opts
-		}
-
-		return Proxy{
-			Name:               vless.Name,
-			Type:               "vless",
-			Server:             vless.Server,
-			Port:               FlexPort(utils.GetPortInt(vless.Port)),
-			Servername:         vless.Query.Sni,
-			Uuid:               vless.Uuid,
-			Client_fingerprint: vless.Query.Fp,
-			Network:            vless.Query.Type,
-			Flow:               vless.Query.Flow,
-			Alpn:               vless.Query.Alpn,
-			Packet_encoding:    vless.Query.PacketEncoding,
-			Ws_opts:            finalWsOpts,
-			H2_opts:            finalH2Opts,
-			Http_opts:          finalHttpOpts,
-			Grpc_opts:          finalGrpcOpts,
-			Reality_opts:       reality_opts,
-			Udp:                config.Udp,
-			Skip_cert_verify:   skipCert,
-			Tls:                tls,
-			Dialer_proxy:       link.DialerProxyName,
-		}, nil
-	case Scheme == "hy" || Scheme == "hysteria":
-		hy, err := DecodeHYURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if hy.Name == "" {
-			hy.Name = fmt.Sprintf("%s:%s", hy.Host, utils.GetPortString(hy.Port))
-		}
-		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
-		skipCert := config.Cert || hy.Insecure == 1
-		return Proxy{
-			Name:             hy.Name,
-			Type:             "hysteria",
-			Server:           hy.Host,
-			Port:             FlexPort(utils.GetPortInt(hy.Port)),
-			Auth_str:         hy.Auth,
-			Up:               hy.UpMbps,
-			Down:             hy.DownMbps,
-			Up_Speed:         hy.UpMbps,
-			Down_Speed:       hy.DownMbps,
-			Alpn:             hy.ALPN,
-			Peer:             hy.Peer,
-			Protocol:         hy.Protocol,
-			Udp:              true, // Hysteria 基于 UDP/QUIC，默认启用 UDP
-			Skip_cert_verify: skipCert,
-			Dialer_proxy:     link.DialerProxyName,
-		}, nil
-	case Scheme == "hy2" || Scheme == "hysteria2":
-		hy2, err := DecodeHY2URL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if hy2.Name == "" {
-			hy2.Name = fmt.Sprintf("%s:%s", hy2.Host, utils.GetPortString(hy2.Port))
-		}
-		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
-		skipCert := config.Cert || hy2.Insecure == 1
-
-		proxy := Proxy{
-			Name:             hy2.Name,
-			Type:             "hysteria2",
-			Server:           hy2.Host,
-			Auth:             hy2.Auth,
-			Sni:              hy2.Sni,
-			Alpn:             hy2.ALPN,
-			Obfs:             hy2.Obfs,
-			Password:         hy2.Password,
-			Obfs_password:    hy2.ObfsPassword,
-			Up:               hy2.UpMbps,
-			Down:             hy2.DownMbps,
-			Up_Speed:         hy2.UpMbps,
-			Down_Speed:       hy2.DownMbps,
-			Udp:              true, // Hysteria2 基于 UDP/QUIC，默认启用 UDP
-			Skip_cert_verify: skipCert,
-			Dialer_proxy:     link.DialerProxyName,
-		}
-
-		// 如果 MPort（端口跳跃）有有效值，使用 Ports 字段；否则使用 Port 字段
-		if hy2.MPort != "" {
-			proxy.Ports = hy2.MPort
-		} else {
-			proxy.Port = FlexPort(utils.GetPortInt(hy2.Port))
-		}
-
-		return proxy, nil
-	case Scheme == "tuic":
-		tuic, err := DecodeTuicURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if tuic.Name == "" {
-			tuic.Name = fmt.Sprintf("%s:%s", tuic.Host, utils.GetPortString(tuic.Port))
-		}
-		disable_sni := false
-		if tuic.Disable_sni == 1 {
-			disable_sni = true
-		}
-		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
-		skipCert := config.Cert || tuic.Insecure == 1
-		return Proxy{
-			Name:                  tuic.Name,
-			Type:                  "tuic",
-			Server:                tuic.Host,
-			Port:                  FlexPort(utils.GetPortInt(tuic.Port)),
-			Password:              tuic.Password,
-			Uuid:                  tuic.Uuid,
-			Congestion_controller: tuic.Congestion_control,
-			Alpn:                  tuic.Alpn,
-			Udp_relay_mode:        tuic.Udp_relay_mode,
-			Disable_sni:           disable_sni,
-			Sni:                   tuic.Sni,
-			Tls:                   tuic.Tls,
-			Client_fingerprint:    tuic.ClientFingerprint,
-			Udp:                   true, // TUIC 基于 UDP/QUIC，默认启用 UDP
-			Skip_cert_verify:      skipCert,
-			Dialer_proxy:          link.DialerProxyName,
-			Version:               tuic.Version,
-			Token:                 tuic.Token,
-		}, nil
-
-	case Scheme == "anytls":
-		anyTLS, err := DecodeAnyTLSURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
-		skipCert := config.Cert || anyTLS.SkipCertVerify
-		return Proxy{
-			Name:               anyTLS.Name,
-			Type:               "anytls",
-			Server:             anyTLS.Server,
-			Port:               FlexPort(utils.GetPortInt(anyTLS.Port)),
-			Password:           anyTLS.Password,
-			Skip_cert_verify:   skipCert,
-			Sni:                anyTLS.SNI,
-			Client_fingerprint: anyTLS.ClientFingerprint,
-			Dialer_proxy:       link.DialerProxyName,
-		}, nil
-	case Scheme == "socks5":
-		socks5, err := DecodeSocks5URL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		return Proxy{
-			Name:         socks5.Name,
-			Type:         "socks5",
-			Server:       socks5.Server,
-			Port:         FlexPort(utils.GetPortInt(socks5.Port)),
-			Username:     socks5.Username,
-			Password:     socks5.Password,
-			Dialer_proxy: link.DialerProxyName,
-		}, nil
-	case Scheme == "http" || Scheme == "https":
-		httpProxy, err := DecodeHTTPURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 跳过证书验证：订阅设置开启时强制应用，否则使用节点自身设置
-		skipCert := config.Cert || httpProxy.SkipCertVerify
-		return Proxy{
-			Name:             httpProxy.Name,
-			Type:             "http",
-			Server:           httpProxy.Server,
-			Port:             FlexPort(utils.GetPortInt(httpProxy.Port)),
-			Username:         httpProxy.Username,
-			Password:         httpProxy.Password,
-			Tls:              httpProxy.TLS,
-			Skip_cert_verify: skipCert,
-			Sni:              httpProxy.SNI,
-			Dialer_proxy:     link.DialerProxyName,
-		}, nil
-	case Scheme == "wg" || Scheme == "wireguard":
-		wg, err := DecodeWireGuardURL(link.Url)
-		if err != nil {
-			return Proxy{}, err
-		}
-		// 如果没有名字，就用服务器地址作为名字
-		if wg.Name == "" {
-			wg.Name = fmt.Sprintf("%s:%s", wg.Server, utils.GetPortString(wg.Port))
-		}
-		return Proxy{
-			Name:           wg.Name,
-			Type:           "wireguard",
-			Server:         wg.Server,
-			Port:           FlexPort(utils.GetPortInt(wg.Port)),
-			Private_key:    wg.PrivateKey,
-			Public_key:     wg.PublicKey,
-			Pre_shared_key: wg.PreSharedKey,
-			Ip:             wg.IP,
-			Ipv6:           wg.IPv6,
-			Mtu:            wg.MTU,
-			Reserved:       wg.Reserved,
-			Allowed_ips:    []string{"0.0.0.0/0"},
-			Udp:            true, // WireGuard 默认启用 UDP
-			Dialer_proxy:   link.DialerProxyName,
-		}, nil
-	default:
-		return Proxy{}, fmt.Errorf("unsupported scheme: %s", Scheme)
+	protocol := detectProtocol(link.Url)
+	if protocol == nil {
+		return Proxy{}, fmt.Errorf("unsupported scheme: %s", strings.ToLower(strings.Split(link.Url, "://")[0]))
 	}
+	proxyCapable, ok := protocol.(ProxyCapable)
+	if !ok {
+		return Proxy{}, fmt.Errorf("protocol %s does not support proxy export", protocol.Name())
+	}
+	return proxyCapable.ToProxy(link, config)
 }
 
 // EncodeClash 用于生成 Clash 配置文件
@@ -697,7 +311,7 @@ func DecodeClash(proxys []Proxy, yamlfile string, customGroups ...[]CustomProxyG
 		}
 	}
 	// 解析 YAML 文件
-	config := make(map[interface{}]interface{})
+	config := make(map[string]interface{})
 	err = yaml.Unmarshal(data, &config)
 	if err != nil {
 		utils.Error("error: %v", err)
@@ -720,7 +334,10 @@ func DecodeClash(proxys []Proxy, yamlfile string, customGroups ...[]CustomProxyG
 	// proxies = append(proxies, newProxy)
 	config["proxies"] = proxies
 	// 往ProxyGroup中插入代理列表
-	proxyGroups := config["proxy-groups"].([]interface{})
+	proxyGroups, ok := config["proxy-groups"].([]interface{})
+	if !ok {
+		proxyGroups = []interface{}{}
+	}
 
 	// 插入自定义代理组（在模板组之后）
 	// 使用 _custom_group 标记来标识自定义代理组，后续循环时跳过节点追加
@@ -788,18 +405,16 @@ func DecodeClash(proxys []Proxy, yamlfile string, customGroups ...[]CustomProxyG
 			continue
 		}
 
-		// 如果已有 include-all: true，说明使用自动节点匹配模式，跳过节点插入
-		// filter、exclude-filter、exclude-type、expected-status 等过滤参数都需要 include-all 为前提
-		// 这样可以减小配置文件大小，让客户端自动包含/过滤节点
-		if includeAll, ok := proxyGroup["include-all"].(bool); ok && includeAll {
-			continue
-		}
-
 		// 自定义代理组（由链式代理规则生成）已有自己的节点列表，跳过节点追加
 		if isCustom, ok := proxyGroup["_custom_group"].(bool); ok && isCustom {
 			// 删除内部标记，避免输出到配置文件
 			delete(proxyGroup, "_custom_group")
 			proxyGroups[i] = proxyGroup
+			continue
+		}
+
+		// include-all、use/filter 等自动匹配组应保持模板原意，不能强行展开为固定节点列表。
+		if shouldPreserveProxyGroup(proxyGroup) {
 			continue
 		}
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sublink/models"
 	"sublink/node"
-	"sublink/services/sse"
+	"sublink/services/notifications"
 	"sublink/utils"
 )
 
@@ -21,6 +21,7 @@ func ExecuteSubscriptionTaskWithTrigger(id int, url string, subName string, trig
 	var downloadWithProxy bool
 	var proxyLink string
 	var userAgent string
+	var requestHeaders models.AirportRequestHeaders
 	var fetchUsageInfo bool
 	var skipTLSVerify bool
 
@@ -31,6 +32,7 @@ func ExecuteSubscriptionTaskWithTrigger(id int, url string, subName string, trig
 		downloadWithProxy = airport.DownloadWithProxy
 		proxyLink = airport.ProxyLink
 		userAgent = airport.UserAgent
+		requestHeaders = airport.RequestHeaders
 		fetchUsageInfo = airport.FetchUsageInfo
 		skipTLSVerify = airport.SkipTLSVerify
 	}
@@ -47,15 +49,14 @@ func ExecuteSubscriptionTaskWithTrigger(id int, url string, subName string, trig
 		reporter = NewTaskManagerReporter(tm, task.ID)
 	}
 
-	usageInfo, err := node.LoadClashConfigFromURLWithReporter(id, url, subName, downloadWithProxy, proxyLink, userAgent, reporter, fetchUsageInfo, skipTLSVerify)
+	usageInfo, err := node.LoadClashConfigFromURLWithReporter(id, url, subName, downloadWithProxy, proxyLink, userAgent, requestHeaders, reporter, fetchUsageInfo, skipTLSVerify)
 	if err != nil {
 		// 仅在失败时发送通知，成功通知由 node/sub.go 中的 scheduleClashToNodeLinks 发送
 		// 这样可以避免重复通知，且成功通知包含更详细的节点统计信息
 		if reporter != nil {
 			reporter.ReportFail(err.Error())
 		}
-		sse.GetSSEBroker().BroadcastEvent("task_update", sse.NotificationPayload{
-			Event:   "sub_update",
+		notifications.Publish("subscription.sync_failed", notifications.Payload{
 			Title:   "订阅更新失败",
 			Message: fmt.Sprintf("订阅 [%s] 更新失败: %v", subName, err),
 			Data: map[string]interface{}{

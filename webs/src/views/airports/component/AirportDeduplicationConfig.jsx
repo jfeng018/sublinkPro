@@ -23,8 +23,10 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
-import { useTheme } from '@mui/material/styles';
+import { alpha, useTheme } from '@mui/material/styles';
 import { getProtocolMeta } from 'api/subscriptions';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
+import { withAlpha } from 'utils/colorUtils';
 
 /**
  * 机场去重规则配置组件
@@ -35,6 +37,21 @@ import { getProtocolMeta } from 'api/subscriptions';
  */
 function AirportDeduplicationConfig({ value, onChange }) {
   const theme = useTheme();
+  const { isDark } = useResolvedColorScheme();
+  const palette = theme.vars?.palette || theme.palette;
+  const darkText = palette.text?.dark || theme.palette.common.white;
+  const primaryTextColor = isDark ? withAlpha(darkText, 0.92) : palette.text.primary;
+  const secondaryTextColor = isDark ? withAlpha(darkText, 0.78) : palette.text.secondary;
+  const panelBorder = isDark ? withAlpha(palette.divider, 0.82) : withAlpha(palette.divider, 0.9);
+  const headerSurface = palette.background.default;
+  const headerHoverSurface = isDark ? withAlpha(palette.background.paper, 0.64) : theme.palette.action.hover;
+  const headerExpandedSurface = isDark ? withAlpha(palette.background.paper, 0.56) : palette.background.default;
+  const neutralChipSurface = isDark ? withAlpha(palette.background.paper, 0.52) : withAlpha(palette.background.paper, 0.96);
+  const activeChipSurface = isDark ? withAlpha(palette.primary.main, 0.18) : withAlpha(palette.primary.main, 0.08);
+  const accordionSurface = isDark ? withAlpha(palette.background.default, 0.72) : palette.background.default;
+  const accordionSummarySurface = isDark ? withAlpha(palette.background.paper, 0.34) : palette.background.default;
+  const accordionSummaryExpandedSurface = isDark ? withAlpha(palette.background.paper, 0.5) : palette.background.paper;
+  const accordionDetailsSurface = isDark ? withAlpha(palette.background.paper, 0.2) : palette.background.paper;
   // 元数据状态
   const [protocolMeta, setProtocolMeta] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -143,8 +160,9 @@ function AirportDeduplicationConfig({ value, onChange }) {
     <Paper
       elevation={0}
       sx={{
+        bgcolor: 'background.paper',
         border: '1px solid',
-        borderColor: 'divider',
+        borderColor: panelBorder,
         borderRadius: 2,
         overflow: 'hidden'
       }}
@@ -156,27 +174,35 @@ function AirportDeduplicationConfig({ value, onChange }) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          background: `linear-gradient(145deg, ${theme.palette.mode === 'dark' ? '#1a2027' : '#f5f5f5'} 0%, ${theme.palette.mode === 'dark' ? '#121417' : '#fafafa'} 100%)`,
+          bgcolor: expanded ? headerExpandedSurface : headerSurface,
+          borderBottom: '1px solid',
+          borderColor: panelBorder,
           cursor: 'pointer',
+          transition: 'background-color 0.2s ease, border-color 0.2s ease',
           '&:hover': {
-            bgcolor: 'action.hover'
+            bgcolor: expanded ? headerExpandedSurface : headerHoverSurface
           }
         }}
         onClick={() => setExpanded(!expanded)}
       >
         <Stack direction="row" alignItems="center" spacing={1}>
           <FilterAltIcon color="primary" fontSize="small" />
-          <Typography variant="subtitle2" fontWeight={600}>
+          <Typography variant="subtitle2" fontWeight={600} sx={{ color: primaryTextColor }}>
             节点入库去重
           </Typography>
           <Chip
             size="small"
             label={getConfigStatus()}
             color={config.mode === 'none' ? 'default' : 'primary'}
-            variant={config.mode === 'none' ? 'outlined' : 'filled'}
+            variant="outlined"
+            sx={{
+              bgcolor: config.mode === 'none' ? neutralChipSurface : activeChipSurface,
+              color: config.mode === 'none' ? secondaryTextColor : theme.palette.primary.main,
+              borderColor: config.mode === 'none' ? panelBorder : alpha(theme.palette.primary.main, isDark ? 0.32 : 0.22)
+            }}
           />
         </Stack>
-        <Stack direction="row" alignItems="center" spacing={0.5}>
+        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ color: secondaryTextColor }}>
           {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
         </Stack>
       </Box>
@@ -208,11 +234,59 @@ function AirportDeduplicationConfig({ value, onChange }) {
                     为每个协议配置去重字段（当多个节点的选定字段值完全相同时，仅保留第一个）：
                   </Typography>
                   {protocolMeta.map((proto) => (
-                    <Accordion key={proto.name} sx={{ mb: 1 }} defaultExpanded={getProtocolSelectedCount(proto.name) > 0}>
+                    <Accordion
+                      key={proto.name}
+                      sx={{
+                        mb: 1,
+                        bgcolor: accordionSurface,
+                        border: '1px solid',
+                        borderColor: panelBorder,
+                        borderRadius: 1.5,
+                        overflow: 'hidden',
+                        boxShadow: 'none',
+                        '&:before': { display: 'none' },
+                        '& .MuiAccordionSummary-root': {
+                          bgcolor: accordionSummarySurface,
+                          minHeight: 48,
+                          color: secondaryTextColor,
+                          transition: 'background-color 0.2s ease, border-color 0.2s ease',
+                          '&:hover': {
+                            bgcolor: isDark ? withAlpha(palette.background.paper, 0.42) : theme.palette.action.hover
+                          },
+                          '&.Mui-expanded': {
+                            minHeight: 48,
+                            bgcolor: accordionSummaryExpandedSurface,
+                            borderBottom: '1px solid',
+                            borderColor: panelBorder
+                          }
+                        },
+                        '& .MuiAccordionSummary-content': {
+                          alignItems: 'center'
+                        },
+                        '& .MuiAccordionSummary-expandIconWrapper': {
+                          color: secondaryTextColor
+                        },
+                        '& .MuiAccordionDetails-root': {
+                          bgcolor: accordionDetailsSurface
+                        }
+                      }}
+                      defaultExpanded={getProtocolSelectedCount(proto.name) > 0}
+                    >
                       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                        <Typography sx={{ fontWeight: 500 }}>{proto.label}</Typography>
+                        <Typography sx={{ fontWeight: 500, color: primaryTextColor }}>{proto.label}</Typography>
                         {getProtocolSelectedCount(proto.name) > 0 && (
-                          <Chip size="small" label={`已选 ${getProtocolSelectedCount(proto.name)} 个`} color="primary" sx={{ ml: 1 }} />
+                          <Chip
+                            size="small"
+                            label={`已选 ${getProtocolSelectedCount(proto.name)} 个`}
+                            color="primary"
+                            variant="outlined"
+                            sx={{
+                              ml: 1,
+                              bgcolor: activeChipSurface,
+                              color: theme.palette.primary.main,
+                              borderColor: alpha(theme.palette.primary.main, isDark ? 0.32 : 0.2)
+                            }}
+                          />
                         )}
                       </AccordionSummary>
                       <AccordionDetails>

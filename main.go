@@ -19,6 +19,7 @@ import (
 	"sublink/services"
 	"sublink/services/geoip"
 	"sublink/services/mihomo"
+	"sublink/services/notifications"
 	"sublink/services/scheduler"
 	"sublink/services/sse"
 	"sublink/services/telegram"
@@ -148,6 +149,12 @@ func Templateinit() {
 			}
 		}
 	}
+
+	// 内嵌模板写入文件系统后，立即补齐缺失的模板元数据，
+	// 避免首次启动时因为迁移先于模板落盘而遗漏 surge.conf 的类别。
+	if err := models.MigrateTemplatesFromFiles("./template"); err != nil {
+		utils.Error("同步模板元数据失败: %v", err)
+	}
 }
 
 func main() {
@@ -155,6 +162,7 @@ func main() {
 	var (
 		showVersion bool
 		port        int
+		dsn         string
 		dbPath      string
 		logPath     string
 		logLevel    string
@@ -166,10 +174,11 @@ func main() {
 	flag.BoolVar(&showVersion, "v", false, "显示版本号 (简写)")
 	flag.IntVar(&port, "port", 0, "服务端口 (覆盖配置文件和环境变量)")
 	flag.IntVar(&port, "p", 0, "服务端口 (简写)")
-	flag.StringVar(&dbPath, "db", "", "数据库目录路径")
+	flag.StringVar(&dsn, "dsn", "", "数据库 DSN (支持 sqlite/mysql/postgres)")
+	flag.StringVar(&dbPath, "db", "", "本地数据目录 / SQLite 默认数据库目录")
 	flag.StringVar(&logPath, "log", "", "日志目录路径")
 	flag.StringVar(&logLevel, "log-level", "", "日志等级 (debug/info/warn/error/fatal)")
-	flag.StringVar(&configFile, "config", "", "配置文件名 (相对于数据库目录)")
+	flag.StringVar(&configFile, "config", "", "配置文件名 (相对于本地数据目录)")
 	flag.StringVar(&configFile, "c", "", "配置文件名 (简写)")
 
 	// 获取版本号
@@ -188,10 +197,19 @@ func main() {
 			var username, password string
 			settingCmd.StringVar(&username, "username", "", "设置账号")
 			settingCmd.StringVar(&password, "password", "", "设置密码")
+			settingCmd.StringVar(&dsn, "dsn", "", "数据库 DSN (支持 sqlite/mysql/postgres)")
+			settingCmd.StringVar(&dbPath, "db", "", "本地数据目录 / SQLite 默认数据库目录")
+			settingCmd.StringVar(&logPath, "log", "", "日志目录路径")
+			settingCmd.StringVar(&logLevel, "log-level", "", "日志等级 (debug/info/warn/error/fatal)")
+			settingCmd.StringVar(&configFile, "config", "", "配置文件名")
+			settingCmd.StringVar(&configFile, "c", "", "配置文件名 (简写)")
 			settingCmd.Parse(os.Args[2:])
 
 			// 初始化数据库目录和数据库
-			initDatabase(dbPath, logPath, logLevel, configFile, port)
+			if err := initDatabase(dsn, dbPath, logPath, logLevel, configFile, port); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
 
 			utils.Info("重置用户: %s", username)
 			settings.ResetUser(username, password)
@@ -202,14 +220,18 @@ func main() {
 			runCmd := flag.NewFlagSet("run", flag.ExitOnError)
 			runCmd.IntVar(&port, "port", 0, "服务端口")
 			runCmd.IntVar(&port, "p", 0, "服务端口 (简写)")
-			runCmd.StringVar(&dbPath, "db", "", "数据库目录路径")
+			runCmd.StringVar(&dsn, "dsn", "", "数据库 DSN (支持 sqlite/mysql/postgres)")
+			runCmd.StringVar(&dbPath, "db", "", "本地数据目录 / SQLite 默认数据库目录")
 			runCmd.StringVar(&logPath, "log", "", "日志目录路径")
 			runCmd.StringVar(&logLevel, "log-level", "", "日志等级 (debug/info/warn/error/fatal)")
 			runCmd.StringVar(&configFile, "config", "", "配置文件名")
 			runCmd.StringVar(&configFile, "c", "", "配置文件名 (简写)")
 			runCmd.Parse(os.Args[2:])
 
-			initDatabase(dbPath, logPath, logLevel, configFile, port)
+			if err := initDatabase(dsn, dbPath, logPath, logLevel, configFile, port); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
 			Run()
 			return
 
@@ -232,15 +254,19 @@ func main() {
 	}
 
 	// 默认运行模式
-	initDatabase(dbPath, logPath, logLevel, configFile, port)
+	if err := initDatabase(dsn, dbPath, logPath, logLevel, configFile, port); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	Run()
 }
 
 // initDatabase 初始化数据库和配置
-func initDatabase(dbPath, logPath, logLevel, configFile string, port int) {
+func initDatabase(dsn, dbPath, logPath, logLevel, configFile string, port int) error {
 	// 设置命令行配置
 	cmdCfg := &config.CommandLineConfig{
 		Port:       port,
+		DSN:        dsn,
 		DBPath:     dbPath,
 		LogPath:    logPath,
 		LogLevel:   logLevel,
@@ -248,18 +274,31 @@ func initDatabase(dbPath, logPath, logLevel, configFile string, port int) {
 	}
 	config.SetCommandLineConfig(cmdCfg)
 
-	// 确保目录存在
+	// 先确保默认本地数据目录存在，以便初始化配置文件
 	ensureDir(config.GetDBPath())
-	ensureDir(config.GetLogPath())
 
 	// 初始化旧配置文件（向后兼容）
 	models.ConfigInit()
 
+	// 先加载基础配置，使配置文件中的 dsn/db_path/log_path 能参与启动
+	config.LoadBootstrap()
+
+	// 确保运行时需要的本地目录存在
+	ensureDir(config.GetDBPath())
+	ensureDir(config.GetLogPath())
+
 	// 初始化数据库
-	database.InitSqlite()
+	if err := database.Init(); err != nil {
+		return err
+	}
+	if database.DB == nil {
+		return fmt.Errorf("数据库初始化失败")
+	}
 
 	// 执行数据库迁移
-	models.RunMigrations()
+	if err := models.RunMigrations(); err != nil {
+		return err
+	}
 
 	// 初始化敏感配置访问器
 	models.InitSecretAccessors()
@@ -269,6 +308,7 @@ func initDatabase(dbPath, logPath, logLevel, configFile string, port int) {
 
 	// 加载完整配置
 	config.Load()
+	return nil
 }
 
 // ensureDir 确保目录存在
@@ -295,7 +335,8 @@ func printHelp() {
 
 全局选项:
   -p, --port      服务端口 (默认: 8000)
-  -db             数据库目录路径 (默认: ./db)
+  --dsn           数据库 DSN (支持 sqlite/mysql/postgres)
+  -db             本地数据目录 / SQLite 默认数据库目录 (默认: ./db)
   -log            日志目录路径 (默认: ./logs)
   --log-level     日志等级 (debug/info/warn/error/fatal, 默认: info)
   -c, --config    配置文件名 (默认: config.yaml)
@@ -303,7 +344,8 @@ func printHelp() {
 
 环境变量:
   SUBLINK_PORT               服务端口
-  SUBLINK_DB_PATH            数据库目录路径
+  SUBLINK_DSN                数据库 DSN (优先于 db_path，支持 sqlite/mysql/postgres)
+  SUBLINK_DB_PATH            本地数据目录 / SQLite 默认数据库目录
   SUBLINK_LOG_PATH           日志目录路径
   SUBLINK_LOG_LEVEL          日志等级 (debug/info/warn/error/fatal)
   SUBLINK_JWT_SECRET         JWT签名密钥 (可选，自动生成)
@@ -322,7 +364,10 @@ func printHelp() {
   sublinkpro                           # 使用默认配置启动
   sublinkpro run -p 9000               # 指定端口启动
   sublinkpro run --log-level debug     # 开启调试日志
-  sublinkpro run --db /data/db         # 指定数据库目录
+  sublinkpro run --db /data            # 指定本地数据目录
+  sublinkpro run --dsn "sqlite:///data/sublink.db"
+  sublinkpro run --dsn "mysql://user:pass@tcp(127.0.0.1:3306)/sublink?charset=utf8mb4&parseTime=True&loc=Local"
+  sublinkpro run --dsn "postgres://user:pass@127.0.0.1:5432/sublink?sslmode=disable"
   sublinkpro setting -username admin -password newpass  # 重置用户`)
 }
 
@@ -350,6 +395,17 @@ func Run() {
 
 	// 初始化gin框架
 	r := gin.Default()
+	trustedProxies := cfg.TrustedProxies
+	if len(trustedProxies) == 0 {
+		trustedProxies = nil
+	}
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		utils.Warn("设置 Gin trusted proxies 失败: %v", err)
+	} else if len(trustedProxies) == 0 {
+		utils.Warn("Gin trusted proxies 已禁用，客户端 IP 将直接使用连接源地址")
+	} else {
+		utils.Info("Gin trusted proxies: %s", strings.Join(trustedProxies, ", "))
+	}
 	// 初始化模板
 	Templateinit()
 
@@ -464,10 +520,8 @@ func Run() {
 
 	// 初始化去重字段元数据缓存（通过反射扫描协议结构体和Node模型）
 	protocol.InitProtocolMeta()
+	utils.SetProtocolLinkFuncs(protocol.GetProtocolLabelFromLink, protocol.RenameNodeLink)
 	models.InitNodeFieldsMeta()
-
-	// 启动时清理过期的记住密码令牌
-	models.CleanAllExpiredTokens()
 
 	// 初始化任务管理器
 	services.InitTaskManager()
@@ -485,7 +539,7 @@ func Run() {
 
 	// 设置 Telegram 服务包装器和 SSE 通知函数
 	services.InitTelegramWrapper()
-	sse.TelegramNotifier = telegram.SendNotification
+	notifications.RegisterTelegramSender(telegram.SendNotification)
 
 	// 从数据库加载定时任务（演示模式下跳过）
 	if !models.IsDemoMode() && sch != nil {

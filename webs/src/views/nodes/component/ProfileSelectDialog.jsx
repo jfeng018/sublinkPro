@@ -11,7 +11,6 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -30,14 +29,34 @@ import TimerIcon from '@mui/icons-material/Timer';
 
 // api
 import { getNodeCheckProfiles, runNodeCheck } from 'api/nodeCheck';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
+import { withAlpha } from 'utils/colorUtils';
+import { getNodeCheckStrategyChipSx, getNodeCheckStrategyThemeTokens } from '../nodeCheckTheme';
 
 /**
  * 节点检测策略选择对话框
  * 用于手动测速时选择检测策略
  */
+
 export default function ProfileSelectDialog({ open, onClose, nodeIds, onSuccess, onOpenSettings }) {
   const theme = useTheme();
-  const isDark = theme.palette.mode === 'dark';
+  const { isDark } = useResolvedColorScheme();
+  const themeTokens = getNodeCheckStrategyThemeTokens(theme, isDark);
+  const {
+    palette,
+    dialogSurface,
+    dialogSurfaceGradient,
+    headerSurface,
+    actionSurface,
+    emptyStateSurface,
+    panelBorder,
+    listRowHoverBackground,
+    listRowSelectedBackground,
+    listRowSelectedHoverBackground,
+    listRowSelectedShadow,
+    closeButtonHoverSurface,
+    secondaryIconOpacity
+  } = themeTokens;
 
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -106,17 +125,35 @@ export default function ProfileSelectDialog({ open, onClose, nodeIds, onSuccess,
       PaperProps={{
         sx: {
           borderRadius: 3,
-          backgroundColor: isDark ? 'rgba(30,30,30,0.95)' : 'background.paper'
+          backgroundColor: dialogSurface,
+          backgroundImage: dialogSurfaceGradient,
+          border: '1px solid',
+          borderColor: panelBorder,
+          boxShadow: isDark ? `inset 0 1px 0 ${withAlpha(palette.common.white, 0.05)}` : theme.shadows[8]
         }
       }}
     >
-      <DialogTitle sx={{ pb: 1 }}>
+      <DialogTitle
+        sx={{
+          pb: 1,
+          borderBottom: `1px solid ${panelBorder}`,
+          backgroundColor: headerSurface
+        }}
+      >
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <SpeedIcon color="primary" />
             <span>选择检测策略</span>
           </Box>
-          <IconButton size="small" onClick={onClose}>
+          <IconButton
+            size="small"
+            onClick={onClose}
+            sx={{
+              '&:hover': {
+                backgroundColor: closeButtonHoverSurface
+              }
+            }}
+          >
             <CloseIcon fontSize="small" />
           </IconButton>
         </Box>
@@ -127,15 +164,25 @@ export default function ProfileSelectDialog({ open, onClose, nodeIds, onSuccess,
         )}
       </DialogTitle>
 
-      <Divider />
-
-      <DialogContent sx={{ p: 0 }}>
+      <DialogContent sx={{ p: 0, backgroundColor: dialogSurface }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
             <CircularProgress size={32} />
           </Box>
         ) : profiles.length === 0 ? (
-          <Box sx={{ textAlign: 'center', py: 4 }}>
+          <Box
+            sx={{
+              textAlign: 'center',
+              py: 4,
+              px: 2,
+              m: 2,
+              borderRadius: 2,
+              border: '1px solid',
+              borderColor: panelBorder,
+              backgroundColor: emptyStateSurface,
+              boxShadow: isDark ? `inset 0 1px 0 ${withAlpha(palette.common.white, 0.04)}` : 'none'
+            }}
+          >
             <Typography color="text.secondary" gutterBottom>
               暂无检测策略
             </Typography>
@@ -158,12 +205,16 @@ export default function ProfileSelectDialog({ open, onClose, nodeIds, onSuccess,
                 selected={selectedProfileId === profile.id}
                 onClick={() => handleSelect(profile.id)}
                 sx={{
-                  borderBottom:
-                    index < profiles.length - 1 ? `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}` : 'none',
+                  borderBottom: index < profiles.length - 1 ? `1px solid ${panelBorder}` : 'none',
+                  transition: 'background 0.2s ease, box-shadow 0.2s ease',
+                  '&:hover': {
+                    background: listRowHoverBackground
+                  },
                   '&.Mui-selected': {
-                    backgroundColor: isDark ? 'rgba(33, 150, 243, 0.16)' : 'rgba(33, 150, 243, 0.08)',
+                    background: listRowSelectedBackground,
+                    boxShadow: listRowSelectedShadow,
                     '&:hover': {
-                      backgroundColor: isDark ? 'rgba(33, 150, 243, 0.24)' : 'rgba(33, 150, 243, 0.12)'
+                      background: listRowSelectedHoverBackground
                     }
                   }
                 }}
@@ -172,29 +223,17 @@ export default function ProfileSelectDialog({ open, onClose, nodeIds, onSuccess,
                   {selectedProfileId === profile.id ? (
                     <CheckCircleIcon color="primary" fontSize="small" />
                   ) : (
-                    <SpeedIcon fontSize="small" sx={{ opacity: 0.5 }} />
+                    <SpeedIcon fontSize="small" sx={{ color: 'text.secondary', opacity: secondaryIconOpacity }} />
                   )}
                 </ListItemIcon>
                 <ListItemText
                   primary={
-                    <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box component="span" sx={{ display: 'flex', alignItems: 'center', columnGap: 0.75, rowGap: 0.75, flexWrap: 'wrap' }}>
                       <span>{profile.name}</span>
                       <Chip
                         label={profile.mode === 'mihomo' ? '延迟+速度' : '仅延迟'}
                         size="small"
-                        sx={{
-                          height: 20,
-                          fontSize: '0.7rem',
-                          backgroundColor:
-                            profile.mode === 'mihomo'
-                              ? isDark
-                                ? 'rgba(76, 175, 80, 0.2)'
-                                : 'rgba(76, 175, 80, 0.1)'
-                              : isDark
-                                ? 'rgba(33, 150, 243, 0.2)'
-                                : 'rgba(33, 150, 243, 0.1)',
-                          color: profile.mode === 'mihomo' ? 'success.main' : 'primary.main'
-                        }}
+                        sx={getNodeCheckStrategyChipSx(themeTokens, profile.mode === 'mihomo' ? 'success' : 'info')}
                       />
                     </Box>
                   }
@@ -226,9 +265,15 @@ export default function ProfileSelectDialog({ open, onClose, nodeIds, onSuccess,
         )}
       </DialogContent>
 
-      <Divider />
-
-      <DialogActions sx={{ px: 2, py: 1.5, justifyContent: 'space-between' }}>
+      <DialogActions
+        sx={{
+          px: 2,
+          py: 1.5,
+          justifyContent: 'space-between',
+          borderTop: `1px solid ${panelBorder}`,
+          backgroundColor: actionSurface
+        }}
+      >
         <Button
           size="small"
           startIcon={<SettingsIcon />}
@@ -246,10 +291,17 @@ export default function ProfileSelectDialog({ open, onClose, nodeIds, onSuccess,
           onClick={handleExecute}
           disabled={!selectedProfileId || executing || profiles.length === 0}
           sx={{
-            background: 'linear-gradient(135deg, #4caf50 0%, #2e7d32 100%)',
-            fontStyle: { color: '#ffffff' },
+            color: palette.common.white,
+            background: `linear-gradient(135deg, ${palette.success.main} 0%, ${palette.success.dark} 100%)`,
+            boxShadow: `0 8px 18px ${withAlpha(palette.success.main, isDark ? 0.28 : 0.22)}`,
             '&:hover': {
-              background: 'linear-gradient(135deg, #66bb6a 0%, #388e3c 100%)'
+              background: `linear-gradient(135deg, ${palette.success.light} 0%, ${palette.success.main} 100%)`,
+              boxShadow: `0 10px 22px ${withAlpha(palette.success.main, isDark ? 0.34 : 0.26)}`
+            },
+            '&.Mui-disabled': {
+              color: 'text.disabled',
+              background: theme.palette.action.disabledBackground,
+              boxShadow: 'none'
             }
           }}
         >
