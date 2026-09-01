@@ -125,16 +125,41 @@ func TestIPv6Address(t *testing.T) {
 	for _, tc := range ipv6Cases {
 		t.Run(tc.protocol+"_ipv6", func(t *testing.T) {
 			var encoded string
+			expectedServer := "2001:db8::1"
 			switch tc.protocol {
 			case "vless":
 				v := VLESS{Name: "IPv6测试", Server: tc.server, Port: 443, Uuid: "88888888-9999-7777-5555-777777777777"}
 				encoded = EncodeVLESSURL(v)
+				if !strings.Contains(encoded, tc.server) {
+					t.Fatalf("编码结果应保留 IPv6 方括号格式: %s", encoded)
+				}
+				decoded, err := DecodeVLESSURL(encoded)
+				if err != nil {
+					t.Fatalf("解码失败: %v", err)
+				}
+				assertEqualString(t, "Server", expectedServer, decoded.Server)
 			case "trojan":
 				tr := Trojan{Name: "IPv6测试", Hostname: tc.server, Port: 443, Password: "pass"}
 				encoded = EncodeTrojanURL(tr)
+				if !strings.Contains(encoded, tc.server) {
+					t.Fatalf("编码结果应保留 IPv6 方括号格式: %s", encoded)
+				}
+				decoded, err := DecodeTrojanURL(encoded)
+				if err != nil {
+					t.Fatalf("解码失败: %v", err)
+				}
+				assertEqualString(t, "Hostname", expectedServer, decoded.Hostname)
 			case "ss":
 				ss := Ss{Name: "IPv6测试", Server: tc.server, Port: 8388, Param: Param{Cipher: "aes-256-gcm", Password: "pass"}}
 				encoded = EncodeSSURL(ss)
+				if !strings.Contains(encoded, tc.server) {
+					t.Fatalf("编码结果应保留 IPv6 方括号格式: %s", encoded)
+				}
+				decoded, err := DecodeSSURL(encoded)
+				if err != nil {
+					t.Fatalf("解码失败: %v", err)
+				}
+				assertEqualString(t, "Server", expectedServer, decoded.Server)
 			}
 
 			if !strings.Contains(encoded, "://") {
@@ -143,6 +168,102 @@ func TestIPv6Address(t *testing.T) {
 			t.Logf("✓ %s IPv6 编码测试通过", tc.protocol)
 		})
 	}
+}
+
+// TestRawUpdateHostAuthorityAcrossProtocols 覆盖原始信息编辑器保存不同主机形态时的通用 URL authority 回归场景。
+// Raw 预览会把 IPv6 Host/Server 规范化为不带方括号；编码回链接时 IPv6 必须恢复 [IPv6]:port，域名、IPv4、单标签主机也不能被破坏。
+func TestRawUpdateHostAuthorityAcrossProtocols(t *testing.T) {
+	hostCases := []struct {
+		name string
+		host string
+	}{
+		{name: "IPv6", host: "2001:db8::3"},
+		{name: "IPv4", host: "192.0.2.10"},
+		{name: "Domain", host: "example.com"},
+		{name: "SingleLabel", host: "nas"},
+	}
+
+	testCases := []struct {
+		name      string
+		fieldName string
+		port      string
+		prefix    string
+		makeLink  func(host string) string
+	}{
+		{name: "VMess", fieldName: "Add", port: "443", makeLink: func(host string) string {
+			return EncodeVmessURL(Vmess{Add: host, Port: 443, Id: "88888888-9999-7777-5555-777777777777", Ps: "raw-vmess-test", V: "2"})
+		}},
+		{name: "VLESS", fieldName: "Server", port: "443", prefix: "@", makeLink: func(host string) string {
+			return "vless://88888888-9999-7777-5555-777777777777@" + expectedTestHostPort(host, "443") + "?encryption=none#raw-vless-test"
+		}},
+		{name: "Trojan", fieldName: "Hostname", port: "443", prefix: "@", makeLink: func(host string) string {
+			return "trojan://test-password@" + expectedTestHostPort(host, "443") + "#raw-trojan-test"
+		}},
+		{name: "SS", fieldName: "Server", port: "8388", prefix: "@", makeLink: func(host string) string {
+			return EncodeSSURL(Ss{Param: Param{Cipher: "aes-256-gcm", Password: "test-password"}, Server: host, Port: 8388, Name: "raw-ss-test"})
+		}},
+		{name: "SSR", fieldName: "Server", port: "8388", makeLink: func(host string) string {
+			return EncodeSSRURL(Ssr{Server: host, Port: 8388, Protocol: "origin", Method: "aes-256-cfb", Obfs: "plain", Password: "test-password", Qurey: Ssrquery{Remarks: "raw-ssr-test"}})
+		}},
+		{name: "Hysteria", fieldName: "Host", port: "22000", prefix: "//", makeLink: func(host string) string {
+			return "hysteria://" + expectedTestHostPort(host, "22000") + "?auth=test-auth&insecure=1#raw-hysteria-test"
+		}},
+		{name: "Hysteria2", fieldName: "Host", port: "22000", prefix: "@", makeLink: func(host string) string {
+			return "hy2://test-password@" + expectedTestHostPort(host, "22000") + "?insecure=1&sni=example.com#raw-hy2-test"
+		}},
+		{name: "TUIC", fieldName: "Host", port: "443", prefix: "@", makeLink: func(host string) string {
+			return "tuic://88888888-9999-7777-5555-777777777777:test-password@" + expectedTestHostPort(host, "443") + "?version=5#raw-tuic-test"
+		}},
+		{name: "AnyTLS", fieldName: "Server", port: "443", prefix: "@", makeLink: func(host string) string {
+			return "anytls://test-password@" + expectedTestHostPort(host, "443") + "#raw-anytls-test"
+		}},
+		{name: "SOCKS5", fieldName: "Server", port: "1080", prefix: "@", makeLink: func(host string) string {
+			return "socks5://test-user:test-password@" + expectedTestHostPort(host, "1080") + "#raw-socks5-test"
+		}},
+		{name: "HTTP", fieldName: "Server", port: "8080", prefix: "@", makeLink: func(host string) string {
+			return "http://test-user:test-password@" + expectedTestHostPort(host, "8080") + "#raw-http-test"
+		}},
+		{name: "HTTPS", fieldName: "Server", port: "8443", prefix: "@", makeLink: func(host string) string {
+			return "https://test-user:test-password@" + expectedTestHostPort(host, "8443") + "#raw-https-test"
+		}},
+		{name: "WireGuard", fieldName: "Server", port: "51820", prefix: "@", makeLink: func(host string) string {
+			return "wireguard://test-private-key@" + expectedTestHostPort(host, "51820") + "?publickey=test-public-key&address=192.0.2.2%2F32#raw-wireguard-test"
+		}},
+		{name: "Mieru", fieldName: "Server", port: "2999", prefix: "@", makeLink: func(host string) string {
+			return "mieru://test-user:test-password@" + expectedTestHostPort(host, "2999") + "?transport=TCP#raw-mieru-test"
+		}},
+	}
+
+	for _, tc := range testCases {
+		for _, hc := range hostCases {
+			t.Run(tc.name+"_"+hc.name, func(t *testing.T) {
+				updated, err := UpdateNodeLinkFields(tc.makeLink(hc.host), `{"`+tc.fieldName+`":"`+hc.host+`"}`)
+				if err != nil {
+					t.Fatalf("更新原始字段失败: %v", err)
+				}
+				if tc.prefix != "" {
+					want := tc.prefix + expectedTestHostPort(hc.host, tc.port)
+					if !strings.Contains(updated, want) {
+						t.Fatalf("authority 不符合预期，期望包含 %q，实际链接: %s", want, updated)
+					}
+				}
+				info, err := ParseNodeLink(updated)
+				if err != nil {
+					t.Fatalf("回写后的链接应可解析: %v", err)
+				}
+				if got := info.Fields[tc.fieldName]; got != hc.host {
+					t.Fatalf("回写后字段 %s = %v，期望 %s", tc.fieldName, got, hc.host)
+				}
+			})
+		}
+	}
+}
+
+func expectedTestHostPort(host, port string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]:" + port
+	}
+	return host + ":" + port
 }
 
 // TestUnicodeInPassword 测试密码中的特殊字符
@@ -224,15 +345,8 @@ func TestSSRBase64Password(t *testing.T) {
 		t.Fatalf("解码失败: %v", err)
 	}
 
-	// SSR 密码在编解码过程中保持一致（内部处理 base64）
-	// 解码后应该恢复原始密码
-	// 注意：根据 SSR 协议，密码在 URL 中是 base64 编码的
-	// 但解码函数应该返回解码后的原始密码
-	t.Logf("原始密码: %s, 解码后密码: %s", original.Password, decoded.Password)
-
-	// SSR 的 Password 字段在解码时没有做 base64 decode
-	// 这是一个潜在的问题，但保持现有行为
-	t.Log("✓ SSR 密码编解码测试完成（注意：SSR 密码在 URL 中使用 base64 编码）")
+	assertEqualString(t, "Password", original.Password, decoded.Password)
+	t.Log("✓ SSR 密码编解码测试通过")
 }
 
 // TestVMESSPortTypes 测试 VMess 端口类型处理
@@ -258,8 +372,6 @@ func TestVMESSPortTypes(t *testing.T) {
 
 // TestTrojanAlpn 测试 Trojan ALPN 处理
 func TestTrojanAlpn(t *testing.T) {
-	// 注意：当前实现不编码 ALPN 到 URL 中
-	// 这是一个已知限制
 	original := Trojan{
 		Name:     "ALPN测试",
 		Hostname: "example.com",
@@ -277,10 +389,13 @@ func TestTrojanAlpn(t *testing.T) {
 		t.Fatalf("解码失败: %v", err)
 	}
 
-	// ALPN 在当前实现中不会被编码到 URL（被注释掉了）
-	// 所以解码后 ALPN 应该为空
-	t.Logf("原始 ALPN: %v, 解码后 ALPN: %v", original.Query.Alpn, decoded.Query.Alpn)
-	t.Log("✓ Trojan ALPN 测试完成（注意：当前实现不完整编码 ALPN）")
+	if len(decoded.Query.Alpn) != len(original.Query.Alpn) {
+		t.Fatalf("ALPN 数量不匹配: 期望 %d, 实际 %d", len(original.Query.Alpn), len(decoded.Query.Alpn))
+	}
+	for i, alpn := range original.Query.Alpn {
+		assertEqualString(t, "ALPN", alpn, decoded.Query.Alpn[i])
+	}
+	t.Log("✓ Trojan ALPN 测试通过")
 }
 
 // TestSSCipherMethods 测试各种加密方式
@@ -326,7 +441,7 @@ func TestURLEncodingInPath(t *testing.T) {
 	}
 
 	for _, path := range paths {
-		t.Run("VLESS_path", func(t *testing.T) {
+		t.Run(path, func(t *testing.T) {
 			original := VLESS{
 				Name:   "路径测试",
 				Server: "example.com",
@@ -344,11 +459,10 @@ func TestURLEncodingInPath(t *testing.T) {
 				t.Fatalf("解码失败: %v", err)
 			}
 
-			// URL 编码可能会改变路径格式，但应该能正确解码
-			t.Logf("原始路径: %s, 解码后路径: %s", path, decoded.Query.Path)
+			assertEqualString(t, "Path", path, decoded.Query.Path)
 		})
 	}
-	t.Log("✓ URL 路径编码测试完成")
+	t.Log("✓ URL 路径编码测试通过")
 }
 
 // min 辅助函数
@@ -484,6 +598,7 @@ func TestHTTPProtocolIntegration(t *testing.T) {
 		meta := GetProtocolMeta("http")
 		if meta == nil {
 			t.Fatal("HTTP协议元数据未找到")
+			return
 		}
 
 		assertEqualString(t, "ProtocolName", "http", meta.Name)
@@ -496,6 +611,7 @@ func TestHTTPProtocolIntegration(t *testing.T) {
 		meta := GetProtocolMeta("https")
 		if meta == nil {
 			t.Fatal("HTTPS协议元数据未找到")
+			return
 		}
 
 		assertEqualString(t, "ProtocolName", "https", meta.Name)

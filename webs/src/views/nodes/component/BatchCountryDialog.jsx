@@ -2,6 +2,7 @@ import PropTypes from 'prop-types';
 import { useMemo } from 'react';
 
 // material-ui
+import { useTheme } from '@mui/material/styles';
 import Autocomplete from '@mui/material/Autocomplete';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -11,40 +12,48 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import useResolvedColorScheme from 'hooks/useResolvedColorScheme';
+import { useTranslation } from 'react-i18next';
 
 // utils
 import { isoToFlag } from '../utils';
+import { getNodeDialogPaperSx, getNodeFieldControlSx, getNodeThemeTokens } from '../nodeTheme';
 
 // 常用国家代码列表
 const COMMON_COUNTRY_CODES = [
-  { code: 'HK', name: '香港' },
-  { code: 'TW', name: '台湾' },
-  { code: 'SG', name: '新加坡' },
-  { code: 'JP', name: '日本' },
-  { code: 'KR', name: '韩国' },
-  { code: 'US', name: '美国' },
-  { code: 'GB', name: '英国' },
-  { code: 'DE', name: '德国' },
-  { code: 'FR', name: '法国' },
-  { code: 'NL', name: '荷兰' },
-  { code: 'AU', name: '澳大利亚' },
-  { code: 'CA', name: '加拿大' },
-  { code: 'RU', name: '俄罗斯' },
-  { code: 'IN', name: '印度' },
-  { code: 'BR', name: '巴西' },
-  { code: 'TR', name: '土耳其' },
-  { code: 'AR', name: '阿根廷' },
-  { code: 'PH', name: '菲律宾' },
-  { code: 'MY', name: '马来西亚' },
-  { code: 'TH', name: '泰国' },
-  { code: 'VN', name: '越南' },
-  { code: 'ID', name: '印度尼西亚' }
+  { code: 'HK', key: 'hk' },
+  { code: 'TW', key: 'tw' },
+  { code: 'SG', key: 'sg' },
+  { code: 'JP', key: 'jp' },
+  { code: 'KR', key: 'kr' },
+  { code: 'US', key: 'us' },
+  { code: 'GB', key: 'gb' },
+  { code: 'DE', key: 'de' },
+  { code: 'FR', key: 'fr' },
+  { code: 'NL', key: 'nl' },
+  { code: 'AU', key: 'au' },
+  { code: 'CA', key: 'ca' },
+  { code: 'RU', key: 'ru' },
+  { code: 'IN', key: 'in' },
+  { code: 'BR', key: 'br' },
+  { code: 'TR', key: 'tr' },
+  { code: 'AR', key: 'ar' },
+  { code: 'PH', key: 'ph' },
+  { code: 'MY', key: 'my' },
+  { code: 'TH', key: 'th' },
+  { code: 'VN', key: 'vn' },
+  { code: 'ID', key: 'id' }
 ];
 
 /**
  * 批量修改国家代码对话框
  */
 export default function BatchCountryDialog({ open, selectedCount, value, setValue, countryOptions, onClose, onSubmit }) {
+  const theme = useTheme();
+  const { t } = useTranslation();
+  const { isDark } = useResolvedColorScheme();
+  const tokens = getNodeThemeTokens(theme, isDark);
+  const fieldControlSx = getNodeFieldControlSx(tokens, tokens.palette.secondary.main);
   // 合并已有国家列表和常用国家列表，去重
   const allOptions = useMemo(() => {
     const existingCodes = new Set(countryOptions || []);
@@ -65,20 +74,31 @@ export default function BatchCountryDialog({ open, selectedCount, value, setValu
     if (!code) return '';
     const flag = isoToFlag(code);
     const commonItem = COMMON_COUNTRY_CODES.find((item) => item.code === code.toUpperCase());
-    const name = commonItem ? commonItem.name : code;
+    const name = commonItem ? t(`nodes.batch.countryDialog.countries.${commonItem.key}`) : code;
     return flag ? `${flag} ${code} - ${name}` : `${code} - ${name}`;
   };
 
   // 预览当前输入的国家代码
   const previewFlag = value ? isoToFlag(value.toUpperCase()) : '';
-  const previewName = value ? COMMON_COUNTRY_CODES.find((item) => item.code === value.toUpperCase())?.name || '' : '';
+  const previewCountry = value ? COMMON_COUNTRY_CODES.find((item) => item.code === value.toUpperCase()) : null;
+  const previewName = previewCountry ? t(`nodes.batch.countryDialog.countries.${previewCountry.key}`) : '';
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>批量修改国家/地区</DialogTitle>
-      <DialogContent>
-        <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-          将为选中的 {selectedCount} 个节点设置相同的国家代码
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth="sm"
+      fullWidth
+      PaperProps={{ sx: getNodeDialogPaperSx(theme, tokens, tokens.palette.secondary.main) }}
+    >
+      <DialogTitle
+        sx={{ color: tokens.primaryText, bgcolor: tokens.mutedPanelSurface, borderBottom: '1px solid', borderColor: tokens.panelBorder }}
+      >
+        {t('nodes.batch.countryDialog.title')}
+      </DialogTitle>
+      <DialogContent dividers sx={{ bgcolor: 'transparent', borderColor: tokens.panelBorder }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          {t('nodes.batch.countryDialog.description', { count: selectedCount })}
         </Typography>
         <Autocomplete
           freeSolo
@@ -87,6 +107,7 @@ export default function BatchCountryDialog({ open, selectedCount, value, setValu
           onChange={(e, newValue) => setValue(newValue ? newValue.toUpperCase() : '')}
           onInputChange={(e, newInputValue) => setValue(newInputValue ? newInputValue.toUpperCase() : '')}
           getOptionLabel={(option) => option}
+          sx={fieldControlSx}
           renderOption={(props, option) => {
             const { key, ...otherProps } = props;
             return (
@@ -95,12 +116,30 @@ export default function BatchCountryDialog({ open, selectedCount, value, setValu
               </Box>
             );
           }}
-          renderInput={(params) => <TextField {...params} label="国家代码" placeholder="输入或选择国家代码，如 US、HK、JP" fullWidth />}
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label={t('nodes.batch.countryDialog.fieldLabel')}
+              placeholder={t('nodes.batch.countryDialog.placeholder')}
+              fullWidth
+              sx={fieldControlSx}
+            />
+          )}
         />
 
         {/* 国旗预览 */}
         {value && (
-          <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 2, textAlign: 'center' }}>
+          <Box
+            sx={{
+              mt: 2,
+              p: 2,
+              bgcolor: tokens.nestedPanelSurface,
+              borderRadius: 2,
+              border: '1px solid',
+              borderColor: tokens.softBorder,
+              textAlign: 'center'
+            }}
+          >
             <Typography variant="h3" sx={{ mb: 0.5 }}>
               {previewFlag || '🏳️'}
             </Typography>
@@ -111,14 +150,14 @@ export default function BatchCountryDialog({ open, selectedCount, value, setValu
           </Box>
         )}
 
-        <Typography variant="caption" color="textSecondary" sx={{ mt: 2, display: 'block' }}>
-          提示：留空将清除所选节点的国家标记。国家代码使用 ISO 3166-1 alpha-2 标准（如 US、CN、JP）。
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block' }}>
+          {t('nodes.batch.countryDialog.helper')}
         </Typography>
       </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>取消</Button>
+      <DialogActions sx={{ bgcolor: tokens.mutedPanelSurface, borderTop: '1px solid', borderColor: tokens.panelBorder }}>
+        <Button onClick={onClose}>{t('common.cancel')}</Button>
         <Button variant="contained" onClick={onSubmit}>
-          确认修改
+          {t('nodes.batch.countryDialog.confirm')}
         </Button>
       </DialogActions>
     </Dialog>
